@@ -6,9 +6,12 @@ persistence, embedding models) are required to run this in CI.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
+from src.agents.router import AgentGraph
 from src.citation import build_citations, format_answer_with_citations, verify_citation_markers
 from src.hybrid_retrieval import BM25Index
-from src.utils.schemas import Document, RetrievedChunk, SourceType
+from src.utils.schemas import Document, RetrievedChunk, RouteName, SourceType
 
 
 class FakeVectorStore:
@@ -48,3 +51,57 @@ async def test_end_to_end_ingest_retrieve_cite(document_processor):
 
     assert "Sources:" in answer
     assert verify_citation_markers(answer, len(citations))
+
+
+async def test_full_agent_pipeline_sql_plots_sales_by_region(sales_sql_agent, app_module):
+    """Full pipeline for a SQL-routed query: LangGraph router -> SQLAgent
+    (NL->SQL against a real, if tiny, sqlite 'sales' table) -> the SSE
+    chart-building helper main.py uses for a `plot ...` query, matching
+    the shape a `/api/v1/agent?stream=true` request builds a `chart` event
+    from (see main._sse_agent_stream).
+    """
+    llm = MagicMock()
+    llm.ainvoke = AsyncMock(return_value="SELECT region, SUM(amount) AS total FROM sales GROUP BY region")
+    sql_agent = sales_sql_agent(llm=llm)
+
+    graph = AgentGraph(rag_agent=MagicMock(), sql_agent=sql_agent, classifier_llm=MagicMock())
+    response = await graph.run("plot sales by region", forced_route="sql")
+
+    assert response.route == RouteName.SQL
+    rows = response.metadata["sql_result"]
+    assert {row["region"] for row in rows} == {"East", "West"}
+
+    chart = app_module._build_chart(rows)
+    assert chart is not None
+    assert chart["data"][0]["type"] == "bar"
+
+
+async def test_full_agent_pipeline_doc_answers_from_excel(tmp_path, document_processor):
+    """Full pipeline for a doc-routed query over an uploaded Excel file:
+    LangGraph router -> DocAgent -> DocumentProcessor's ExcelLoader,
+    without needing the file pre-indexed in the vector store.
+    """
+    import openpyxl
+
+    from src.agents.doc_agent import DocAgent
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "Sales"
+    sheet.append(["region", "amount"])
+    sheet.append(["East", 150])
+    sheet.append(["West", 150])
+    file_path = tmp_path / "sales.xlsx"
+    workbook.save(file_path)
+
+    reranker = MagicMock()
+    reranker.rerank.side_effect = lambda query, candidates, top_k: candidates[:top_k]
+
+    doc_agent = DocAgent(document_processor=document_processor, reranker=reranker)
+    graph = AgentGraph(rag_agent=MagicMock(), doc_agent=doc_agent, classifier_llm=MagicMock())
+
+    response = await graph.run("Summarize sales.xlsx", file_path=str(file_path), forced_route="doc")
+
+    assert response.route == RouteName.DOC
+    assert response.citations
+    assert response.citations[0].sheet == "Sales"

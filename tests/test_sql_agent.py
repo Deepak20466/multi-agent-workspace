@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import text
 
-from src.agents.sql_agent import SQLAgent, UnsafeSQLError, enforce_row_limit, validate_sql
+from src.agents.sql_agent import SQL_MODEL, SQLAgent, UnsafeSQLError, enforce_row_limit, validate_sql
 
 
 def _make_agent(tmp_path, llm=None) -> SQLAgent:
@@ -70,3 +70,36 @@ async def test_answer_rejects_unsafe_generated_sql(tmp_path):
 
     with pytest.raises(UnsafeSQLError):
         await agent.answer("delete everything")
+
+
+async def test_nl_to_sql_generates_valid_select_from_mocked_llm(sales_sql_agent):
+    llm = MagicMock()
+    llm.ainvoke = AsyncMock(return_value="SELECT region, SUM(amount) AS total FROM sales GROUP BY region")
+    agent = sales_sql_agent(llm=llm)
+
+    sql = await agent._generate_sql("total sales by region")
+
+    assert sql.strip().upper().startswith("SELECT")
+    assert "sales" in sql.lower()
+    validate_sql(sql)  # doesn't raise: it's a single, safe SELECT
+
+
+def test_sql_ast_guardrail_blocks_delete_and_cte_writes():
+    """Postgres allows data-modifying statements inside a WITH clause (e.g.
+    `WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x`), so checking
+    only the outermost statement's type isn't enough -- validate_sql must
+    walk the whole AST to catch a write hidden inside a CTE.
+    """
+    with pytest.raises(UnsafeSQLError):
+        validate_sql("WITH deleted AS (DELETE FROM users RETURNING *) SELECT * FROM deleted")
+
+
+def test_default_llm_uses_configured_model_without_real_anthropic_client(mock_anthropic, tmp_path):
+    agent = _make_agent(tmp_path)
+
+    llm = agent._default_llm()
+
+    mock_anthropic.assert_called_once()
+    assert llm is mock_anthropic.return_value
+    _, kwargs = mock_anthropic.call_args
+    assert kwargs["model"] == SQL_MODEL
