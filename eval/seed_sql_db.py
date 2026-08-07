@@ -1,8 +1,8 @@
-"""Seeds a minimal `users`/`orders` schema into DATABASE_URL so SQL
+"""Seeds a minimal `sales` schema into DATABASE_URL so SQL
 testset generation (eval/generate_testset.py) and SQL eval
 (eval/run_ragas_eval.py) have a real, deterministic schema to work
 against in CI. Idempotent -- safe to run against an already-seeded
-database.
+database. Mirrors the schema in data/init.sql.
 """
 
 from __future__ import annotations
@@ -17,32 +17,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("seed_sql_db")
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS sales (
     id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    region TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS orders (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    status TEXT NOT NULL,
-    amount NUMERIC NOT NULL
+    region TEXT NOT NULL,
+    product TEXT NOT NULL,
+    amount NUMERIC NOT NULL,
+    sale_date DATE NOT NULL
 );
 """
 
-_USERS = [
-    (1, "Alice", "East"),
-    (2, "Bob", "West"),
-    (3, "Carol", "East"),
-]
-
-_ORDERS = [
-    (1, 1, "completed", 100.00),
-    (2, 1, "pending", 25.00),
-    (3, 2, "completed", 150.00),
-    (4, 3, "completed", 50.00),
-    (5, 3, "cancelled", 30.00),
+_SALES = [
+    (1, "North", "Widget", 100.00, "2026-01-05"),
+    (2, "South", "Widget", 25.00, "2026-01-12"),
+    (3, "East", "Gadget", 150.00, "2026-02-01"),
+    (4, "West", "Gizmo", 50.00, "2026-02-14"),
+    (5, "East", "Gadget", 30.00, "2026-03-03"),
 ]
 
 
@@ -54,26 +43,21 @@ def seed(database_url: str) -> None:
             if statement:
                 conn.execute(text(statement))
 
-        existing = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
+        existing = conn.execute(text("SELECT COUNT(*) FROM sales")).scalar()
         if existing:
-            logger.info("users table already seeded (%d rows); skipping inserts", existing)
+            logger.info("sales table already seeded (%d rows); skipping inserts", existing)
             return
 
-        for user_id, name, region in _USERS:
-            conn.execute(
-                text("INSERT INTO users (id, name, region) VALUES (:id, :name, :region)"),
-                {"id": user_id, "name": name, "region": region},
-            )
-        for order_id, user_id, status, amount in _ORDERS:
+        for sale_id, region, product, amount, sale_date in _SALES:
             conn.execute(
                 text(
-                    "INSERT INTO orders (id, user_id, status, amount) "
-                    "VALUES (:id, :user_id, :status, :amount)"
+                    "INSERT INTO sales (id, region, product, amount, sale_date) "
+                    "VALUES (:id, :region, :product, :amount, :sale_date)"
                 ),
-                {"id": order_id, "user_id": user_id, "status": status, "amount": amount},
+                {"id": sale_id, "region": region, "product": product, "amount": amount, "sale_date": sale_date},
             )
 
-    logger.info("seeded %d users, %d orders", len(_USERS), len(_ORDERS))
+    logger.info("seeded %d sales", len(_SALES))
 
 
 def main() -> None:

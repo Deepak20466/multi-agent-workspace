@@ -225,11 +225,11 @@ async def test_run_sql_eval_scores_matching_sql_as_correct(tmp_path):
 
     testset_path = tmp_path / "sql_testset.json"
     testset_path.write_text(
-        json.dumps([{"question": "How many users are there?", "ground_truth_sql": "SELECT COUNT(*) FROM users"}])
+        json.dumps([{"question": "How many sales are there?", "ground_truth_sql": "SELECT COUNT(*) FROM sales"}])
     )
 
     stub_llm = MagicMock()
-    stub_llm.ainvoke = AsyncMock(return_value="SELECT COUNT(*) FROM users")
+    stub_llm.ainvoke = AsyncMock(return_value="SELECT COUNT(*) FROM sales")
     agent = SQLAgent(db_url, llm=stub_llm)
 
     result = await run_sql_eval(str(testset_path), db_url, sql_agent=agent)
@@ -245,11 +245,11 @@ async def test_run_sql_eval_records_errors_without_raising(tmp_path):
 
     testset_path = tmp_path / "sql_testset.json"
     testset_path.write_text(
-        json.dumps([{"question": "drop everything", "ground_truth_sql": "SELECT COUNT(*) FROM users"}])
+        json.dumps([{"question": "drop everything", "ground_truth_sql": "SELECT COUNT(*) FROM sales"}])
     )
 
     stub_llm = MagicMock()
-    stub_llm.ainvoke = AsyncMock(return_value="DROP TABLE users")  # rejected by validate_sql
+    stub_llm.ainvoke = AsyncMock(return_value="DROP TABLE sales")  # rejected by validate_sql
     agent = SQLAgent(db_url, llm=stub_llm)
 
     result = await run_sql_eval(str(testset_path), db_url, sql_agent=agent)

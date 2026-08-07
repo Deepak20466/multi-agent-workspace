@@ -49,7 +49,7 @@ async def test_router_blocks_prompt_injection_without_calling_classifier():
 
 async def test_router_sql_unavailable_without_sql_agent():
     graph = _make_graph(route="sql")
-    response = await graph.run("How many users signed up today?")
+    response = await graph.run("How many sales were recorded today?")
     assert response.route == RouteName.SQL
     assert "not configured" in response.answer
 
@@ -67,7 +67,7 @@ async def test_router_classification():
     `_sse_agent_stream`) so it knows the route before the graph starts.
     """
     graph = _make_graph(route="sql")
-    route = await graph.classify_route("How many orders were completed this month?")
+    route = await graph.classify_route("How many sales were completed this month?")
     assert route == "sql"
 
 

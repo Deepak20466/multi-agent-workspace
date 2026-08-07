@@ -19,6 +19,14 @@ services:
     depends_on:
       - postgres
       - redis
+      - chroma
+
+  chroma:
+    image: chromadb/chroma:0.4.24
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_index:/chroma/chroma
 
   postgres:
     image: postgres:16-alpine
@@ -39,3 +47,4 @@ services:
 
 volumes:
   pgdata:
+  chroma_index:

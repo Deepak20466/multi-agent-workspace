@@ -2,30 +2,18 @@
 -- to query against. Read-only SELECTs only reach this DB; see
 -- validate_sql() for the AST-level enforcement.
 
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS sales (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    signed_up_at TIMESTAMP NOT NULL DEFAULT now()
+    region VARCHAR(50) NOT NULL,
+    product VARCHAR(50) NOT NULL,
+    amount FLOAT NOT NULL,
+    sale_date DATE NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS orders (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    amount NUMERIC(10, 2) NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    created_at TIMESTAMP NOT NULL DEFAULT now()
-);
-
-INSERT INTO users (name, email) VALUES
-    ('Alice Johnson', 'alice@example.com'),
-    ('Bob Martinez', 'bob@example.com'),
-    ('Carla Nguyen', 'carla@example.com')
-ON CONFLICT (email) DO NOTHING;
-
-INSERT INTO orders (user_id, amount, status) VALUES
-    (1, 49.99, 'completed'),
-    (1, 12.50, 'completed'),
-    (2, 100.00, 'pending'),
-    (3, 75.25, 'completed')
-ON CONFLICT DO NOTHING;
+INSERT INTO sales (region, product, amount, sale_date) VALUES
+    ('North', 'Widget', 1200.50, '2026-01-05'),
+    ('North', 'Gadget', 850.00, '2026-02-14'),
+    ('South', 'Widget', 640.75, '2026-01-20'),
+    ('South', 'Gizmo', 990.25, '2026-03-02'),
+    ('East', 'Gadget', 430.00, '2026-02-28'),
+    ('West', 'Widget', 1575.00, '2026-03-15');

@@ -37,17 +37,17 @@ DEFAULT_QUESTIONS = [
 ]
 
 # Deterministic fallback SQL testset, matching the seed schema created by
-# eval/seed_sql_db.py (users(id, name, ...), orders(id, user_id, status,
-# amount, ...)) — used when no LLM is configured.
+# eval/seed_sql_db.py (sales(id, region, product, amount, sale_date)) —
+# used when no LLM is configured.
 DEFAULT_SQL_TESTSET = [
-    {"question": "How many users are there?", "ground_truth_sql": "SELECT COUNT(*) FROM users"},
+    {"question": "How many sales are there?", "ground_truth_sql": "SELECT COUNT(*) FROM sales"},
     {
-        "question": "What is the total amount of completed orders?",
-        "ground_truth_sql": "SELECT SUM(amount) FROM orders WHERE status = 'completed'",
+        "question": "What is the total amount of sales in the East region?",
+        "ground_truth_sql": "SELECT SUM(amount) FROM sales WHERE region = 'East'",
     },
     {
-        "question": "How many orders does each user have?",
-        "ground_truth_sql": "SELECT user_id, COUNT(*) FROM orders GROUP BY user_id",
+        "question": "How many sales does each region have?",
+        "ground_truth_sql": "SELECT region, COUNT(*) FROM sales GROUP BY region",
     },
 ]
 
