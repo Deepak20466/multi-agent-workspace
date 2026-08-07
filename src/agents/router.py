@@ -33,7 +33,13 @@ from src.agents.web_agent import WebAgent
 from src.guardrails import PIIGuard, detect_prompt_injection
 from src.telemetry import log_event
 from src.tools import TOOL_MAP
-from src.utils.retry_handler import APIConnectionError, RateLimitError, async_api_rate_limit_retry
+from src.utils.retry_handler import (
+    APIConnectionError,
+    CircuitOpenError,
+    RateLimitError,
+    RetryableError,
+    async_api_rate_limit_retry,
+)
 from src.utils.schemas import AgentResponse, AgentState, RouteName
 
 ROUTER_MODEL = os.getenv("ROUTER_MODEL", "claude-haiku-4-5")
@@ -133,6 +139,8 @@ class AgentGraph:
             response = await self.sql_agent.answer(state["query"])
         except UnsafeSQLError as exc:
             response = AgentResponse(answer=f"Couldn't safely answer that as SQL: {exc}", route=RouteName.SQL)
+        except (RetryableError, CircuitOpenError) as exc:
+            response = AgentResponse(answer=f"SQL agent unavailable: {exc}", route=RouteName.SQL)
         update = _apply_response(response)
         update["sql_result"] = response.metadata.get("rows")
         return update

@@ -82,3 +82,13 @@ def guard_input(text: str, pii_guard: PIIGuard) -> tuple[str, dict]:
     safe_text, pii_entities = pii_guard.anonymize(text)
     report["pii_entities"] = [e.model_dump() for e in pii_entities]
     return safe_text, report
+
+
+def guard_output(text: str, pii_guard: PIIGuard) -> str:
+    """Run output-side guardrails (PII anonymization) on agent-generated
+    text before it leaves the system, in case retrieved context leaked PII
+    into the answer.
+    """
+
+    safe_text, _ = pii_guard.anonymize(text)
+    return safe_text

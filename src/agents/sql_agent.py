@@ -136,6 +136,7 @@ class SQLAgent:
 
         return ChatAnthropic(model=SQL_MODEL, temperature=0)
 
+    @with_retry(exceptions=(RetryableError, ConnectionError, TimeoutError))
     def get_schema(self) -> str:
         """Introspect the connected database and render a compact
         `table(col type, ...)` description for the NL->SQL prompt.
@@ -145,12 +146,15 @@ class SQLAgent:
         if self._schema_cache is not None:
             return self._schema_cache
 
-        inspector = inspect(self.engine)
-        lines = []
-        for table_name in inspector.get_table_names():
-            columns = inspector.get_columns(table_name)
-            col_desc = ", ".join(f"{c['name']} {c['type']}" for c in columns)
-            lines.append(f"{table_name}({col_desc})")
+        try:
+            inspector = inspect(self.engine)
+            lines = []
+            for table_name in inspector.get_table_names():
+                columns = inspector.get_columns(table_name)
+                col_desc = ", ".join(f"{c['name']} {c['type']}" for c in columns)
+                lines.append(f"{table_name}({col_desc})")
+        except Exception as exc:
+            raise RetryableError(str(exc)) from exc
 
         self._schema_cache = "\n".join(lines)
         return self._schema_cache
