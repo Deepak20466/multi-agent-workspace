@@ -1,4 +1,4 @@
-name: RAGAS Evaluation Gate
+name: RAGAS Eval v3.1
 
 on:
   pull_request:
@@ -9,6 +9,36 @@ on:
 jobs:
   ragas-eval:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rag
+          POSTGRES_PASSWORD: rag
+          POSTGRES_DB: ragdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rag -d ragdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://rag:rag@localhost:5432/ragdb
+      REDIS_URL: redis://localhost:6379/0
+
     steps:
       - uses: actions/checkout@v4
 
@@ -31,20 +61,30 @@ jobs:
       - name: Run unit tests
         run: pytest tests/ -v --cov=src
 
-      - name: Generate eval testset
-        run: python eval/generate_testset.py --sample-dir data/sample_documents --output eval/testset.json
+      - name: Seed SQL eval database
+        run: python eval/seed_sql_db.py
 
-      - name: Run RAGAS evaluation
+      - name: Generate eval testsets (rag + sql + doc)
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python eval/generate_testset.py --type all --sample-dir data/sample_documents --output-dir eval
+
+      - name: Run RAG/SQL/doc evaluation
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: python eval/run_ragas_eval.py --testset eval/testset.json --output eval/results.json
+        run: python eval/run_ragas_eval.py --type all --output eval/results_v3.json
 
       - name: Check quality gates
-        run: python eval/check_gates.py --results eval/results.json
+        run: python eval/check_gates.py --results eval/results_v3.json
 
       - name: Upload eval results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ragas-results
-          path: eval/results.json
+          name: ragas-results-v3
+          path: |
+            eval/testset.json
+            eval/sql_testset.json
+            eval/doc_testset.json
+            eval/results_v3.json
