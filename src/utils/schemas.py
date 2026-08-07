@@ -126,6 +126,7 @@ class AgentState(TypedDict, total=False):
     session_id: str
     chat_history: List[dict]
     route: Literal["rag", "sql", "doc", "web"]
+    forced_route: Optional[Literal["rag", "sql", "doc", "web"]]
     documents: List[Any]
     sql_result: Optional[List[dict]]
     file_path: Optional[str]

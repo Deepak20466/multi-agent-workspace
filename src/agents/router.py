@@ -124,9 +124,27 @@ class AgentGraph:
             return {"blocked": True, "block_reason": "potential prompt injection detected"}
 
         safe_query, _ = self.pii_guard.anonymize(query)
-        route = await self._classify(safe_query, has_file=bool(state.get("file_path")))
-        log_event("router_decision", route=route)
+
+        forced_route = state.get("forced_route")
+        if forced_route:
+            route = forced_route
+            log_event("router_forced", route=route)
+        else:
+            route = await self._classify(safe_query, has_file=bool(state.get("file_path")))
+            log_event("router_decision", route=route)
+
         return {"query": safe_query, "route": route, "blocked": False}
+
+    async def classify_route(self, query: str, has_file: bool = False) -> str:
+        """Classify `query` without running the graph — used by callers
+        (e.g. the HTTP API) that need to know the route before starting a
+        streaming response, ahead of the actual `run`/`astream_events`
+        call. Pass the result back in as `forced_route` so the router
+        node doesn't re-classify.
+        """
+
+        safe_query, _ = self.pii_guard.anonymize(query)
+        return await self._classify(safe_query, has_file=has_file)
 
     async def _rag_node(self, state: AgentState) -> Dict:
         response = await self.rag_agent.answer(state["query"])
@@ -232,6 +250,7 @@ class AgentGraph:
         user_id: str,
         session_id: str,
         chat_history: Optional[List[dict]],
+        forced_route: Optional[str] = None,
     ) -> AgentState:
         return {
             "query": query,
@@ -239,6 +258,7 @@ class AgentGraph:
             "user_id": user_id,
             "session_id": session_id,
             "chat_history": chat_history or [],
+            "forced_route": forced_route,
         }
 
     @staticmethod
@@ -263,8 +283,9 @@ class AgentGraph:
         user_id: str = "",
         session_id: str = "",
         chat_history: Optional[List[dict]] = None,
+        forced_route: Optional[str] = None,
     ) -> AgentResponse:
-        initial_state = self._initial_state(query, file_path, user_id, session_id, chat_history)
+        initial_state = self._initial_state(query, file_path, user_id, session_id, chat_history, forced_route)
         final_state = await self.workflow.ainvoke(initial_state, config=self._config(session_id, user_id))
         return self._to_response(final_state)
 
@@ -275,8 +296,9 @@ class AgentGraph:
         session_id: str = "",
         chat_history: Optional[List[dict]] = None,
         file_path: Optional[str] = None,
+        forced_route: Optional[str] = None,
     ):
-        initial_state = self._initial_state(query, file_path, user_id, session_id, chat_history)
+        initial_state = self._initial_state(query, file_path, user_id, session_id, chat_history, forced_route)
         config = self._config(session_id, user_id)
         async for event in self.workflow.astream_events(initial_state, config=config, version="v2"):
             yield event
