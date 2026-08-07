@@ -48,6 +48,9 @@ class AgentsSettings(BaseModel):
     rag_model: str = "claude-3-5-sonnet-20240620"
     max_iterations: int = 5
     memory: str = "redis"
+    llm_backend: str = "anthropic"
+    ollama_model: str = "llama3"
+    ollama_base_url: str = "http://localhost:11434"
 
 
 class ResilienceSettings(BaseModel):
@@ -65,6 +68,9 @@ class RetrievalSettings(BaseModel):
     use_hyde: bool = True
     use_rerank: bool = True
     rerank_model: str = "rerank-english-v3.0"
+    rerank_top_k: int = 5
+    use_flashrank: bool = True
+    flashrank_model: str = "ms-marco-MiniLM-L-12-v2"
 
 
 class SqlSettings(BaseModel):
@@ -73,6 +79,7 @@ class SqlSettings(BaseModel):
     enable_charts: bool = True
     allowed_tables: List[str] = Field(default_factory=list)
     ast_enforce_readonly: bool = True
+    check_ambiguity: bool = True
 
     @field_validator("database_url", mode="before")
     @classmethod

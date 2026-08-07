@@ -3,7 +3,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from sqlalchemy import text
 
-from src.agents.sql_agent import SQL_MODEL, SQLAgent, UnsafeSQLError, enforce_row_limit, validate_sql
+from src.agents.sql_agent import (
+    SQL_MODEL,
+    SQLAgent,
+    UnsafeSQLError,
+    detect_ambiguity,
+    enforce_row_limit,
+    validate_sql,
+)
 
 
 def _make_agent(tmp_path, llm=None) -> SQLAgent:
@@ -103,3 +110,56 @@ def test_default_llm_uses_configured_model_without_real_anthropic_client(mock_an
     assert llm is mock_anthropic.return_value
     _, kwargs = mock_anthropic.call_args
     assert kwargs["model"] == SQL_MODEL
+
+
+# ---------------------------------------------------------------------------
+# ambiguity / clarification engine
+# ---------------------------------------------------------------------------
+
+_SALES_SCHEMA = "sales(id INTEGER, region TEXT, amount REAL)"
+
+
+def test_detect_ambiguity_flags_vague_superlative_missing_count_and_metric():
+    result = detect_ambiguity("show top customers", _SALES_SCHEMA)
+    assert result is not None
+    assert "top" in result["ambiguous_terms"]
+    assert len(result["missing"]) == 2
+    assert "clarification_question" in result
+
+
+def test_detect_ambiguity_flags_best_sales_missing_count():
+    result = detect_ambiguity("what were our best sales", _SALES_SCHEMA)
+    assert result is not None
+    assert "best" in result["ambiguous_terms"]
+
+
+def test_detect_ambiguity_none_when_count_and_metric_both_given():
+    assert detect_ambiguity("top 10 sales by amount", _SALES_SCHEMA) is None
+
+
+def test_detect_ambiguity_none_without_vague_terms():
+    assert detect_ambiguity("total sales by region", _SALES_SCHEMA) is None
+
+
+async def test_answer_returns_clarification_for_ambiguous_query(tmp_path):
+    agent = _make_agent(tmp_path)  # no llm needed: clarification short-circuits before generation
+
+    response = await agent.answer("show me the best sales")
+
+    assert response.metadata["needs_clarification"] is True
+    assert response.answer == response.metadata["clarification_question"]
+
+
+async def test_answer_skips_ambiguity_check_when_disabled(tmp_path):
+    llm = MagicMock()
+    llm.ainvoke = AsyncMock(return_value="SELECT * FROM sales")
+    db_path = tmp_path / "test.db"
+    agent = SQLAgent(f"sqlite:///{db_path}", llm=llm, check_ambiguity=False)
+    with agent.engine.begin() as conn:
+        conn.execute(text("CREATE TABLE sales (id INTEGER, region TEXT)"))
+        conn.execute(text("INSERT INTO sales (id, region) VALUES (1, 'East')"))
+
+    response = await agent.answer("show me the best sales")
+
+    assert "needs_clarification" not in response.metadata
+    assert response.metadata["row_count"] == 1

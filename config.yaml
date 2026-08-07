@@ -16,6 +16,9 @@ agents:
   rag_model: claude-3-5-sonnet-20240620
   max_iterations: 5
   memory: redis
+  llm_backend: anthropic          # anthropic | ollama
+  ollama_model: llama3
+  ollama_base_url: http://localhost:11434
 
 resilience:
   max_retries: 5
@@ -31,6 +34,9 @@ retrieval:
   use_hyde: true
   use_rerank: true
   rerank_model: rerank-english-v3.0
+  rerank_top_k: 5
+  use_flashrank: true
+  flashrank_model: ms-marco-MiniLM-L-12-v2
 
 sql:
   database_url: ${DATABASE_URL}
@@ -38,6 +44,7 @@ sql:
   enable_charts: true
   allowed_tables: []
   ast_enforce_readonly: true
+  check_ambiguity: true
 
 doc_intelligence:
   enable_ocr: true

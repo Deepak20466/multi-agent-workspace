@@ -30,6 +30,9 @@ class RAGAgent:
         query_expander: QueryExpander | None = None,
         pii_guard: PIIGuard | None = None,
         llm=None,
+        top_k: int = 10,
+        rerank_top_k: int = 5,
+        use_rerank: bool = True,
     ):
         self.retriever = retriever
         self.reranker = reranker or Reranker()
@@ -37,6 +40,9 @@ class RAGAgent:
         self.llm = llm
         self.query_expander = query_expander or QueryExpander(llm=llm)
         self.pii_guard = pii_guard or PIIGuard()
+        self.top_k = top_k
+        self.rerank_top_k = rerank_top_k
+        self.use_rerank = use_rerank
 
     async def _generate(self, query: str, context_chunks: list[str]) -> str:
         if self.llm is None:
@@ -50,7 +56,7 @@ class RAGAgent:
         )
         return await self.llm.ainvoke(prompt)
 
-    async def answer(self, query: str, k: int = 5) -> AgentResponse:
+    async def answer(self, query: str, k: int | None = None) -> AgentResponse:
         if detect_prompt_injection(query):
             log_event("rag_blocked_injection", query=query)
             return AgentResponse(
@@ -65,6 +71,8 @@ class RAGAgent:
             log_event("rag_cache_hit", query=safe_query)
             return AgentResponse(**cached)
 
+        rerank_top_k = k or self.rerank_top_k
+
         start = time.perf_counter()
         with traced_call("rag"):
             queries = await self.query_expander.multi_query(safe_query)
@@ -72,8 +80,11 @@ class RAGAgent:
             if hyde_passage not in queries:
                 queries = [*queries, hyde_passage]
 
-            candidates = await self.retriever.retrieve(queries, top_k=k * 3)
-            top = await self.reranker.arerank(safe_query, candidates, top_k=k)
+            candidates = await self.retriever.retrieve(queries, top_k=self.top_k)
+            if self.use_rerank:
+                top = await self.reranker.arerank(safe_query, candidates, top_k=rerank_top_k)
+            else:
+                top = candidates[:rerank_top_k]
             citations = build_citations(top)
             raw_answer = await self._generate(safe_query, [c.chunk.text for c in top])
             answer_text = format_answer_with_citations(raw_answer, citations)

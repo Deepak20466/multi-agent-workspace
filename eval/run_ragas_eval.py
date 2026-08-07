@@ -288,6 +288,50 @@ async def run_doc_eval(
     return result
 
 
+def run_retrieval_eval(testset_path: str, retriever=None, k: int = 10) -> dict:
+    """Retrieval precision/recall eval: for each testset row with a
+    `relevant_chunk_ids` ground-truth list, retrieve `k` chunks and score
+    the overlap. Skips (rather than fails) when the testset has no rows
+    carrying that field, since eval/generate_testset.py doesn't currently
+    produce it -- retrieval ground truth has to be supplied separately.
+    """
+
+    from eval.metrics import aggregate_retrieval_metrics
+
+    testset = json.loads(Path(testset_path).read_text(encoding="utf-8"))
+    rows = [row for row in testset if row.get("relevant_chunk_ids")]
+    if not rows:
+        return {"status": f"skipped: no rows in {testset_path} carry relevant_chunk_ids"}
+
+    if retriever is None:
+        from src.hybrid_retrieval import HybridRetriever
+        from src.vectorstore import VectorStore
+
+        retriever = HybridRetriever(VectorStore())
+
+    pairs = []
+    for row in rows:
+        retrieved = asyncio.run(retriever.retrieve([row["question"]], top_k=k))
+        retrieved_ids = [r.chunk.chunk_id for r in retrieved]
+        pairs.append((retrieved_ids, row["relevant_chunk_ids"]))
+
+    result = aggregate_retrieval_metrics(pairs)
+    logger.info("retrieval eval: precision=%.3f recall=%.3f (n=%d)", result["precision"], result["recall"], result["n"])
+    return result
+
+
+def run_sql_guardrail_eval(cases=None) -> dict:
+    """SQL AST guardrail pass-rate eval: reported alongside the other
+    sections in results_v3.json (see eval/metrics.py for the case set).
+    """
+
+    from eval.metrics import sql_ast_guardrail_pass_rate
+
+    result = sql_ast_guardrail_pass_rate(cases)
+    logger.info("sql guardrail pass rate: %.3f (%d/%d)", result["pass_rate"], result["correct"], result["n"])
+    return result
+
+
 def run_all(
     rag_testset: str = "eval/testset.json",
     sql_testset: str = "eval/sql_testset.json",
@@ -298,6 +342,8 @@ def run_all(
         "rag": run_rag_eval(rag_testset),
         "sql": asyncio.run(run_sql_eval(sql_testset)),
         "doc": asyncio.run(run_doc_eval(doc_testset)),
+        "retrieval": run_retrieval_eval(rag_testset),
+        "sql_guardrail": run_sql_guardrail_eval(),
     }
     Path(output_path).write_text(json.dumps(results, indent=2), encoding="utf-8")
     logger.info("wrote combined results to %s", output_path)

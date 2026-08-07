@@ -21,7 +21,6 @@ import asyncio
 import os
 from typing import Dict, List, Optional
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -31,6 +30,7 @@ from src.agents.rag_agent import RAGAgent
 from src.agents.sql_agent import SQLAgent, UnsafeSQLError
 from src.agents.web_agent import WebAgent
 from src.guardrails import PIIGuard, detect_prompt_injection
+from src.llm_factory import build_llm
 from src.telemetry import log_event
 from src.tools import TOOL_MAP
 from src.utils.retry_handler import (
@@ -88,13 +88,23 @@ class AgentGraph:
         pii_guard: Optional[PIIGuard] = None,
         classifier_llm=None,
         checkpointer=None,
+        llm_backend: Optional[str] = None,
+        ollama_model: Optional[str] = None,
+        ollama_base_url: Optional[str] = None,
     ):
         self.rag_agent = rag_agent
         self.sql_agent = sql_agent
         self.doc_agent = doc_agent
         self.web_agent = web_agent
         self.pii_guard = pii_guard or PIIGuard()
-        self.classifier_llm = classifier_llm or ChatAnthropic(model=ROUTER_MODEL, temperature=0, max_tokens=10)
+        self.classifier_llm = classifier_llm or build_llm(
+            ROUTER_MODEL,
+            backend=llm_backend,
+            ollama_model=ollama_model,
+            ollama_base_url=ollama_base_url,
+            temperature=0,
+            max_tokens=10,
+        )
         self.checkpointer = checkpointer or MemorySaver()
         self.workflow = self._build_graph()
 

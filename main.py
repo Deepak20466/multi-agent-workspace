@@ -54,6 +54,7 @@ from src.config import load_config
 from src.document_processing import DocumentProcessor
 from src.hybrid_retrieval import HybridRetriever
 from src.middleware import APIKeyMiddleware, RateLimiter
+from src.reranking import Reranker
 from src.utils.schemas import Citation, RouteName
 from src.vectorstore import VectorStore
 
@@ -68,12 +69,31 @@ _document_processor = DocumentProcessor(
     mask_pii=_config.doc_intelligence.redact_pii,
 )
 _response_cache = ResponseCache(ttl_seconds=_config.cache.ttl)
-_rag_agent = RAGAgent(retriever=_retriever, cache=_response_cache)
+_reranker = Reranker(use_flashrank=_config.retrieval.use_flashrank, flashrank_model=_config.retrieval.flashrank_model)
+_rag_agent = RAGAgent(
+    retriever=_retriever,
+    reranker=_reranker,
+    cache=_response_cache,
+    top_k=_config.retrieval.top_k,
+    rerank_top_k=_config.retrieval.rerank_top_k,
+    use_rerank=_config.retrieval.use_rerank,
+)
 _doc_agent = DocAgent(document_processor=_document_processor)
 _web_agent = WebAgent(max_results=_config.web.max_results)
 
 _database_url = _config.sql.database_url or os.getenv("DATABASE_URL")
-_sql_agent = SQLAgent(_database_url, max_rows=_config.sql.max_rows) if _database_url else None
+_sql_agent = (
+    SQLAgent(
+        _database_url,
+        max_rows=_config.sql.max_rows,
+        check_ambiguity=_config.sql.check_ambiguity,
+        llm_backend=_config.agents.llm_backend,
+        ollama_model=_config.agents.ollama_model,
+        ollama_base_url=_config.agents.ollama_base_url,
+    )
+    if _database_url
+    else None
+)
 
 _rate_limiter = RateLimiter(redis_url=os.getenv("REDIS_URL"), capacity=60, window_seconds=60.0)
 
@@ -92,6 +112,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             doc_agent=_doc_agent,
             web_agent=_web_agent,
             checkpointer=checkpointer,
+            llm_backend=_config.agents.llm_backend,
+            ollama_model=_config.agents.ollama_model,
+            ollama_base_url=_config.agents.ollama_base_url,
         )
         yield
 
@@ -308,6 +331,9 @@ async def _build_cli_agent_graph() -> AgentGraph:
         doc_agent=_doc_agent,
         web_agent=_web_agent,
         checkpointer=checkpointer,
+        llm_backend=_config.agents.llm_backend,
+        ollama_model=_config.agents.ollama_model,
+        ollama_base_url=_config.agents.ollama_base_url,
     )
 
 
@@ -534,9 +560,15 @@ async def _eval_doc() -> dict:
     return {"passed": passed, "total": len(_DOC_EVAL_QUESTIONS)}
 
 
+def _eval_sql_guardrail() -> dict:
+    from eval.run_ragas_eval import run_sql_guardrail_eval
+
+    return run_sql_guardrail_eval()
+
+
 async def _run_eval(eval_type: str) -> dict:
     results: dict[str, dict] = {}
-    types = ["rag", "sql", "doc"] if eval_type == "all" else [eval_type]
+    types = ["rag", "sql", "doc", "sql_guardrail"] if eval_type == "all" else [eval_type]
 
     for t in types:
         if t == "rag":
@@ -545,13 +577,19 @@ async def _run_eval(eval_type: str) -> dict:
             results["sql"] = await _eval_sql()
         elif t == "doc":
             results["doc"] = await _eval_doc()
+        elif t == "sql_guardrail":
+            results["sql_guardrail"] = await asyncio.to_thread(_eval_sql_guardrail)
 
     return results
 
 
 @cli.command("eval")
 @click.option(
-    "--type", "eval_type", type=click.Choice(["all", "rag", "sql", "doc"]), default="all", show_default=True
+    "--type",
+    "eval_type",
+    type=click.Choice(["all", "rag", "sql", "doc", "sql_guardrail"]),
+    default="all",
+    show_default=True,
 )
 @click.option("--json", "as_json", is_flag=True, default=False)
 def eval_cmd(eval_type: str, as_json: bool) -> None:
@@ -603,9 +641,13 @@ async def _run_eval_agent(target: str) -> list[dict]:
 def eval_agent_cmd(target: str, as_json: bool) -> None:
     """Evaluate router classification accuracy against labeled queries."""
 
+    from eval.metrics import router_tool_selection_accuracy
+
     rows = asyncio.run(_run_eval_agent(target))
+    accuracy = router_tool_selection_accuracy(rows)
+
     if as_json:
-        console.print_json(json.dumps(rows))
+        console.print_json(json.dumps({"rows": rows, **accuracy}))
         return
 
     table = Table(title=f"Router accuracy ({target})")
@@ -613,13 +655,11 @@ def eval_agent_cmd(target: str, as_json: bool) -> None:
     table.add_column("Expected")
     table.add_column("Predicted")
     table.add_column("Result")
-    correct = 0
     for row in rows:
         status = "[green]correct[/green]" if row["correct"] else "[red]wrong[/red]"
-        correct += row["correct"]
         table.add_row(row["query"][:50], row["expected"], row["predicted"], status)
     console.print(table)
-    console.print(f"[bold]Accuracy: {correct}/{len(rows)}[/bold]")
+    console.print(f"[bold]Accuracy: {accuracy['correct']}/{accuracy['n']} ({accuracy['accuracy']:.1%})[/bold]")
 
 
 if __name__ == "__main__":
