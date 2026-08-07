@@ -1,0 +1,71 @@
+# Multi-Agent Workspace runtime configuration.
+#
+# Loaded/validated by src/config.py (AppConfig). `${VAR}` placeholders
+# are expanded from the environment at load time (see .env.example),
+# so secrets stay out of this file.
+
+app:
+  name: multi-agent-workspace
+  version: "3.1"
+  host: 0.0.0.0
+  port: 8000
+
+agents:
+  enabled: [rag, sql, doc, web]
+  router_model: claude-3-haiku-20240307
+  rag_model: claude-3-5-sonnet-20240620
+  max_iterations: 5
+  memory: redis
+
+resilience:
+  max_retries: 5
+  backoff: 1
+  max: 10
+  retry_on: [429, 503, 529]
+
+retrieval:
+  top_k: 10
+  alpha: 0.5
+  rrf_k: 60
+  use_multi_query: true
+  use_hyde: true
+  use_rerank: true
+  rerank_model: rerank-english-v3.0
+
+sql:
+  database_url: ${DATABASE_URL}
+  max_rows: 1000
+  enable_charts: true
+  allowed_tables: []
+  ast_enforce_readonly: true
+
+doc_intelligence:
+  enable_ocr: true
+  ocr_lang: eng
+  ocr_dpi: 300
+  enable_tables: true
+  enable_excel: true
+  redact_pii: true
+
+web:
+  provider: tavily
+  max_results: 3
+  timeout_s: 10
+
+mcp:
+  enabled: true
+  transport: stdio
+
+tools:
+  enable_calculator: true
+  enable_python_repl: true
+  enable_email: false
+  timeout_s: 5
+
+cache:
+  enabled: true
+  ttl: 3600
+
+telemetry:
+  enabled: true
+  prometheus_port: 9090

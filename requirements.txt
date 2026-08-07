@@ -56,3 +56,4 @@ black>=23.12.1
 ruff>=0.1.11
 click>=8.1.7
 rich>=13.7.0
+PyYAML>=6.0

@@ -1,4 +1,4 @@
-"""FastAPI entrypoint for the multi-agent workspace.
+"""FastAPI entrypoint (and CLI) for the multi-agent workspace.
 
 Wires VectorStore -> HybridRetriever -> RAGAgent, plus the optional
 SQL/Doc/Web agents, into the LangGraph AgentGraph ("the brain") and
@@ -10,10 +10,18 @@ every request.
 (routed by the LangGraph classifier) or an explicit route, and can
 either return a single ChatResponse or stream an SSE event feed
 (metadata/token/chart/citations/done) via `stream=true`.
+
+Runtime settings live in config.yaml (see src/config.py); env vars still
+carry secrets (${DATABASE_URL}, API keys). This module is dual-purpose:
+`uvicorn main:app` serves the FastAPI app (unaffected by anything below),
+while `python main.py <command>` drives the click CLI defined at the
+bottom, for one-shot/offline use (indexing, ad-hoc queries, eval) that
+doesn't need a running server.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -21,11 +29,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal, Optional
 
+import click
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import BaseModel, Field
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 from sse_starlette.sse import EventSourceResponse
 
 load_dotenv()
@@ -37,21 +49,31 @@ from src.agents.rag_agent import RAGAgent
 from src.agents.router import AgentGraph
 from src.agents.sql_agent import SQLAgent
 from src.agents.web_agent import WebAgent
+from src.cache import ResponseCache
+from src.config import load_config
 from src.document_processing import DocumentProcessor
 from src.hybrid_retrieval import HybridRetriever
 from src.middleware import APIKeyMiddleware, RateLimiter
 from src.utils.schemas import Citation, RouteName
 from src.vectorstore import VectorStore
 
-_vector_store = VectorStore()
-_retriever = HybridRetriever(_vector_store)
-_rag_agent = RAGAgent(retriever=_retriever)
-_document_processor = DocumentProcessor()
-_doc_agent = DocAgent(document_processor=_document_processor)
-_web_agent = WebAgent()
+_config = load_config()
+console = Console()
 
-_database_url = os.getenv("DATABASE_URL")
-_sql_agent = SQLAgent(_database_url) if _database_url else None
+_vector_store = VectorStore()
+_retriever = HybridRetriever(_vector_store, alpha=_config.retrieval.alpha)
+_document_processor = DocumentProcessor(
+    ocr_lang=_config.doc_intelligence.ocr_lang,
+    ocr_dpi=_config.doc_intelligence.ocr_dpi,
+    mask_pii=_config.doc_intelligence.redact_pii,
+)
+_response_cache = ResponseCache(ttl_seconds=_config.cache.ttl)
+_rag_agent = RAGAgent(retriever=_retriever, cache=_response_cache)
+_doc_agent = DocAgent(document_processor=_document_processor)
+_web_agent = WebAgent(max_results=_config.web.max_results)
+
+_database_url = _config.sql.database_url or os.getenv("DATABASE_URL")
+_sql_agent = SQLAgent(_database_url, max_rows=_config.sql.max_rows) if _database_url else None
 
 _rate_limiter = RateLimiter(redis_url=os.getenv("REDIS_URL"), capacity=60, window_seconds=60.0)
 
@@ -141,7 +163,7 @@ async def _sse_agent_stream(chat_request: ChatRequest, query_id: str, route: str
         "data": json.dumps({"query_id": query_id, "route": route, "session_id": chat_request.session_id}),
     }
 
-    charts_enabled = os.getenv("ENABLE_CHARTS", "false").lower() == "true"
+    charts_enabled = _config.sql.enable_charts
 
     try:
         async for event in app.state.agent_graph.astream_events(
@@ -256,7 +278,349 @@ def ingest(file: UploadFile) -> dict:
     return {"file": file.filename, "chunks_indexed": n_added}
 
 
-if __name__ == "__main__":
-    import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+# ---------------------------------------------------------------------
+# CLI (`python main.py <command>`) -- only reached when this module is
+# run directly, never when uvicorn imports it as `main:app`.
+# ---------------------------------------------------------------------
+
+
+async def _build_cli_agent_graph() -> AgentGraph:
+    """AgentGraph for one-shot CLI use. Tries the Redis checkpointer
+    (per config `agents.memory: redis`) so `--session-id`/`chat`
+    continuity survives across separate CLI invocations; falls back to
+    an in-memory checkpointer (scoped to this single process) if Redis
+    isn't reachable, so the CLI still works without it.
+    """
+
+    checkpointer = None
+    if _config.agents.memory == "redis" and os.getenv("REDIS_URL"):
+        try:
+            checkpointer = await AsyncRedisSaver.from_conn_string(os.getenv("REDIS_URL")).__aenter__()
+            await checkpointer.asetup()
+        except Exception as exc:
+            console.print(f"[yellow]Redis checkpointer unavailable ({exc}); using in-memory session state.[/yellow]")
+            checkpointer = None
+
+    return AgentGraph(
+        rag_agent=_rag_agent,
+        sql_agent=_sql_agent,
+        doc_agent=_doc_agent,
+        web_agent=_web_agent,
+        checkpointer=checkpointer,
+    )
+
+
+def _print_agent_response(result) -> None:
+    console.print(Panel(result.answer, title=f"[bold]{result.route.value}[/bold]", border_style="cyan"))
+    if result.citations:
+        table = Table(title="Citations")
+        table.add_column("#", justify="right")
+        table.add_column("Source")
+        table.add_column("Quote")
+        for c in result.citations:
+            table.add_row(str(c.id), c.source, (c.quote or "")[:80])
+        console.print(table)
+
+
+@click.group()
+def cli() -> None:
+    """Multi-Agent Workspace CLI."""
+
+
+@cli.command()
+@click.option(
+    "--sources",
+    default="data/sample_documents",
+    show_default=True,
+    help="File or directory to index into the vector store + BM25 corpus.",
+)
+def index(sources: str) -> None:
+    """Index documents for retrieval (DocumentProcessor -> VectorStore)."""
+
+    source_path = Path(sources)
+    if not source_path.exists():
+        console.print(f"[red]no such file or directory: {sources}[/red]")
+        raise SystemExit(1)
+    files = [source_path] if source_path.is_file() else sorted(p for p in source_path.glob("*") if p.is_file())
+
+    table = Table(title=f"Indexing {len(files)} file(s) from {sources}")
+    table.add_column("File")
+    table.add_column("Chunks", justify="right")
+    table.add_column("Status")
+
+    total_chunks = 0
+    for file_path in files:
+        try:
+            _, chunks = _document_processor.process(file_path)
+            n_added = _vector_store.add_chunks(chunks)
+            _retriever.index_corpus(chunks)
+            total_chunks += n_added
+            table.add_row(file_path.name, str(n_added), "[green]ok[/green]")
+        except Exception as exc:
+            table.add_row(file_path.name, "-", f"[red]error: {exc}[/red]")
+
+    console.print(table)
+    console.print(f"[bold]Total chunks indexed:[/bold] {total_chunks}")
+
+
+@cli.command()
+@click.argument("query_text")
+@click.option(
+    "--agent",
+    "agent_type",
+    type=click.Choice(["auto", "rag", "sql", "doc", "web"]),
+    default="auto",
+    show_default=True,
+    help="Force a route, bypassing the LangGraph classifier.",
+)
+@click.option("--stream", is_flag=True, default=False, help="Stream events via astream_events.")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Print JSON instead of rich formatting.")
+@click.option("--user-id", default="cli-user", show_default=True)
+@click.option("--session-id", default="", help="Session id for conversational memory continuity.")
+@click.option("--file-path", default=None, help="Path to a file for the doc agent.")
+def agent(
+    query_text: str,
+    agent_type: str,
+    stream: bool,
+    as_json: bool,
+    user_id: str,
+    session_id: str,
+    file_path: Optional[str],
+) -> None:
+    """Run a single query through the router (or a forced --agent)."""
+
+    asyncio.run(_run_agent(query_text, agent_type, stream, as_json, user_id, session_id, file_path))
+
+
+async def _run_agent(
+    query_text: str,
+    agent_type: str,
+    stream: bool,
+    as_json: bool,
+    user_id: str,
+    session_id: str,
+    file_path: Optional[str],
+) -> None:
+    graph = await _build_cli_agent_graph()
+    forced_route = None if agent_type == "auto" else agent_type
+
+    if not stream:
+        result = await graph.run(
+            query_text, file_path=file_path, user_id=user_id, session_id=session_id, forced_route=forced_route
+        )
+        if as_json:
+            console.print_json(json.dumps(result.model_dump(mode="json")))
+        else:
+            _print_agent_response(result)
+        return
+
+    async for event in graph.astream_events(
+        query_text, user_id=user_id, session_id=session_id, file_path=file_path, forced_route=forced_route
+    ):
+        kind = event.get("event")
+        name = event.get("name")
+
+        if as_json:
+            if kind in {"on_chat_model_stream", "on_chain_end"}:
+                console.print_json(json.dumps({"event": kind, "name": name}, default=str))
+            continue
+
+        if kind == "on_chat_model_stream":
+            chunk = event.get("data", {}).get("chunk")
+            content = getattr(chunk, "content", None) if chunk is not None else None
+            if content:
+                console.print(content, end="")
+        elif kind == "on_chain_end" and name in {"rag", "sql", "doc", "web", "blocked"}:
+            output = event.get("data", {}).get("output") or {}
+            answer = output.get("answer")
+            if answer:
+                console.print(answer)
+            for c in output.get("citations") or []:
+                console.print(f"  [dim][{c.id}][/dim] {c.source}")
+    console.print()
+
+
+@cli.command()
+@click.argument("message", required=False)
+@click.option("--user-id", default="cli-user", show_default=True)
+@click.option("--session-id", default=None, help="Reuse a session id for continuity; generated if omitted.")
+def chat(message: Optional[str], user_id: str, session_id: Optional[str]) -> None:
+    """One-shot chat turn, or an interactive REPL when MESSAGE is omitted."""
+
+    asyncio.run(_run_chat(message, user_id, session_id))
+
+
+async def _run_chat(message: Optional[str], user_id: str, session_id: Optional[str]) -> None:
+    session_id = session_id or str(uuid.uuid4())
+    graph = await _build_cli_agent_graph()
+
+    if message is not None:
+        result = await graph.run(message, user_id=user_id, session_id=session_id)
+        _print_agent_response(result)
+        return
+
+    console.print(f"[dim]session: {session_id} -- type 'exit' to quit[/dim]")
+    while True:
+        try:
+            turn = console.input("[bold cyan]you>[/bold cyan] ")
+        except (EOFError, KeyboardInterrupt):
+            break
+        if turn.strip().lower() in {"exit", "quit"}:
+            break
+        if not turn.strip():
+            continue
+        result = await graph.run(turn, user_id=user_id, session_id=session_id)
+        _print_agent_response(result)
+
+
+@cli.command("mcp-serve")
+def mcp_serve() -> None:
+    """Start the MCP server exposing the RAG/SQL/Doc/Web agents as tools."""
+
+    from src.mcp_server import mcp
+
+    transport = _config.mcp.transport
+    logger.info("starting MCP server (transport={})", transport)
+    mcp.run(transport=transport)
+
+
+def _eval_rag() -> dict:
+    from eval.generate_testset import generate_testset
+    from eval.run_ragas_eval import run_eval as run_ragas_eval
+
+    testset_path = Path("eval/testset.json")
+    if not testset_path.exists():
+        generate_testset("data/sample_documents", str(testset_path))
+    return run_ragas_eval(str(testset_path), "eval/results.json")
+
+
+_SQL_EVAL_QUESTIONS = [
+    "How many users are there?",
+    "What is the total amount of completed orders?",
+]
+
+_DOC_EVAL_QUESTIONS = [
+    ("data/sample_documents/refund_policy.txt", "What is the refund policy?"),
+]
+
+
+async def _eval_sql() -> dict:
+    if _sql_agent is None:
+        return {"status": "skipped: DATABASE_URL is not configured"}
+
+    passed = 0
+    for question in _SQL_EVAL_QUESTIONS:
+        try:
+            response = await _sql_agent.answer(question)
+            if response.metadata.get("rows") is not None:
+                passed += 1
+        except Exception as exc:
+            logger.warning("sql eval question failed: {} ({})", question, exc)
+
+    return {"passed": passed, "total": len(_SQL_EVAL_QUESTIONS)}
+
+
+async def _eval_doc() -> dict:
+    passed = 0
+    for file_path, question in _DOC_EVAL_QUESTIONS:
+        try:
+            response = _doc_agent.answer_from_file(file_path, question)
+            if response.answer:
+                passed += 1
+        except Exception as exc:
+            logger.warning("doc eval question failed: {} ({})", question, exc)
+
+    return {"passed": passed, "total": len(_DOC_EVAL_QUESTIONS)}
+
+
+async def _run_eval(eval_type: str) -> dict:
+    results: dict[str, dict] = {}
+    types = ["rag", "sql", "doc"] if eval_type == "all" else [eval_type]
+
+    for t in types:
+        if t == "rag":
+            results["rag"] = await asyncio.to_thread(_eval_rag)
+        elif t == "sql":
+            results["sql"] = await _eval_sql()
+        elif t == "doc":
+            results["doc"] = await _eval_doc()
+
+    return results
+
+
+@cli.command("eval")
+@click.option(
+    "--type", "eval_type", type=click.Choice(["all", "rag", "sql", "doc"]), default="all", show_default=True
+)
+@click.option("--json", "as_json", is_flag=True, default=False)
+def eval_cmd(eval_type: str, as_json: bool) -> None:
+    """Run quality evaluation (RAGAS for rag; smoke checks for sql/doc)."""
+
+    results = asyncio.run(_run_eval(eval_type))
+    if as_json:
+        console.print_json(json.dumps(results, default=str))
+        return
+
+    table = Table(title=f"Eval results ({eval_type})")
+    table.add_column("Type")
+    table.add_column("Metric")
+    table.add_column("Value")
+    for type_name, metrics in results.items():
+        for metric, value in metrics.items():
+            value_str = f"{value:.3f}" if isinstance(value, float) else str(value)
+            table.add_row(type_name, metric, value_str)
+    console.print(table)
+
+
+# (query, expected_route) pairs for a lightweight router-accuracy check.
+_ROUTING_EVAL_CASES = [
+    ("What does our refund policy say about returns?", "rag"),
+    ("Summarize the key points in our knowledge base about onboarding.", "rag"),
+    ("How many orders were completed this month?", "sql"),
+    ("What's the total revenue from all users?", "sql"),
+    ("Extract the totals table from invoice.pdf", "doc"),
+    ("Summarize the attached report.docx", "doc"),
+    ("What's the latest news about the Federal Reserve today?", "web"),
+    ("Who won the game last night?", "web"),
+]
+
+
+async def _run_eval_agent(target: str) -> list[dict]:
+    graph = await _build_cli_agent_graph()
+    cases = _ROUTING_EVAL_CASES if target == "all" else [c for c in _ROUTING_EVAL_CASES if c[1] == target]
+
+    rows = []
+    for query_text, expected in cases:
+        predicted = await graph.classify_route(query_text)
+        rows.append({"query": query_text, "expected": expected, "predicted": predicted, "correct": predicted == expected})
+    return rows
+
+
+@cli.command("eval-agent")
+@click.argument("target", type=click.Choice(["all", "rag", "sql", "doc", "web"]), default="all")
+@click.option("--json", "as_json", is_flag=True, default=False)
+def eval_agent_cmd(target: str, as_json: bool) -> None:
+    """Evaluate router classification accuracy against labeled queries."""
+
+    rows = asyncio.run(_run_eval_agent(target))
+    if as_json:
+        console.print_json(json.dumps(rows))
+        return
+
+    table = Table(title=f"Router accuracy ({target})")
+    table.add_column("Query")
+    table.add_column("Expected")
+    table.add_column("Predicted")
+    table.add_column("Result")
+    correct = 0
+    for row in rows:
+        status = "[green]correct[/green]" if row["correct"] else "[red]wrong[/red]"
+        correct += row["correct"]
+        table.add_row(row["query"][:50], row["expected"], row["predicted"], status)
+    console.print(table)
+    console.print(f"[bold]Accuracy: {correct}/{len(rows)}[/bold]")
+
+
+if __name__ == "__main__":
+    cli()
