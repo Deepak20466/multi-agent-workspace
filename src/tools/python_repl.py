@@ -1,27 +1,31 @@
 """Sandboxed Python REPL tool.
 
-Executes in a subprocess with a hard timeout and a restricted builtins
-set, and blocks obviously dangerous imports (os, sys, subprocess, socket,
-shutil) via a static AST check before ever running the code. This is a
-best-effort sandbox suitable for a trusted-agent / internal-tool context,
-not a hard security boundary for untrusted code.
+Executes in a subprocess with a hard 5s timeout and a restricted
+builtins set. Imports are allowlisted (pandas, numpy, math, plotly,
+json) via a static AST check before the code ever runs, so `os`, `sys`,
+`subprocess`, and anything else not on the allowlist are rejected
+up front. This is a best-effort sandbox suitable for a trusted-agent /
+internal-tool context, not a hard security boundary for untrusted code.
 """
 
 from __future__ import annotations
 
 import ast
+import builtins
 import multiprocessing
 import queue
 
+from langchain_core.tools import tool
+
 TIMEOUT_SECONDS = 5
 
-_BLOCKED_MODULES = {"os", "sys", "subprocess", "socket", "shutil", "ctypes", "pathlib"}
+_ALLOWED_MODULES = {"pandas", "numpy", "math", "plotly", "json"}
 
 _SAFE_BUILTINS = {
-    name: getattr(__builtins__, name) if hasattr(__builtins__, name) else None
+    name: getattr(builtins, name)
     for name in ("abs", "all", "any", "bool", "dict", "enumerate", "float", "int", "len",
                  "list", "map", "max", "min", "print", "range", "round", "set", "sorted",
-                 "str", "sum", "tuple", "zip")
+                 "str", "sum", "tuple", "zip", "__import__")
 }
 
 
@@ -36,8 +40,12 @@ def _check_ast_safety(code: str) -> None:
             module = node.module if isinstance(node, ast.ImportFrom) else None
             names = [module] if module else [alias.name for alias in node.names]
             for name in names:
-                if name and name.split(".")[0] in _BLOCKED_MODULES:
-                    raise PythonREPLError(f"import of '{name}' is not allowed in the sandbox")
+                top = name.split(".")[0] if name else None
+                if top not in _ALLOWED_MODULES:
+                    raise PythonREPLError(
+                        f"import of '{name}' is not allowed in the sandbox "
+                        f"(allowed: {', '.join(sorted(_ALLOWED_MODULES))})"
+                    )
 
 
 def _worker(code: str, result_queue: "multiprocessing.Queue") -> None:
@@ -54,12 +62,7 @@ def _worker(code: str, result_queue: "multiprocessing.Queue") -> None:
         result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
 
 
-def run_python(code: str, timeout_seconds: int = TIMEOUT_SECONDS) -> str:
-    """Run `code` in an isolated subprocess and return captured stdout.
-
-    Raises PythonREPLError on a blocked import, non-zero exit, or timeout.
-    """
-
+def _run_python(code: str, timeout_seconds: int = TIMEOUT_SECONDS) -> str:
     _check_ast_safety(code)
 
     ctx = multiprocessing.get_context("spawn")
@@ -83,12 +86,7 @@ def run_python(code: str, timeout_seconds: int = TIMEOUT_SECONDS) -> str:
     return payload
 
 
-TOOL_SPEC = {
-    "name": "python_repl",
-    "description": "Execute a short Python snippet in a sandboxed subprocess and return stdout.",
-    "parameters": {
-        "type": "object",
-        "properties": {"code": {"type": "string", "description": "Python code to execute"}},
-        "required": ["code"],
-    },
-}
+@tool
+def python_repl(code: str) -> str:
+    """Execute a short Python snippet in a sandboxed subprocess (5s timeout) and return captured stdout. pandas, numpy, math, plotly, and json may be imported; os, sys, and subprocess are blocked."""
+    return _run_python(code)

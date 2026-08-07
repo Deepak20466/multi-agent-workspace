@@ -1,40 +1,35 @@
-"""Tool registry + MCP server exposing calculator, python_repl, and
-send_email as MCP tools so any MCP-compatible client (Claude Desktop,
-other agent frameworks) can call them, not just the in-process agents.
+"""Tool registry exposing calculator, python_repl, and send_email as
+LangChain-compatible tools, plus an MCP server so any MCP-compatible
+client (Claude Desktop, other agent frameworks) can call them too.
 """
 
 from __future__ import annotations
 
-from .calculator import calculate, CalculatorError, TOOL_SPEC as CALCULATOR_SPEC
-from .python_repl import run_python, PythonREPLError, TOOL_SPEC as PYTHON_REPL_SPEC
-from .send_email import send_email, EmailSendError, TOOL_SPEC as SEND_EMAIL_SPEC
+from .calculator import calculator, CalculatorError
+from .python_repl import python_repl, PythonREPLError
+from .send_email import send_email, EmailSendError
 
-TOOL_REGISTRY = {
-    "calculator": {"spec": CALCULATOR_SPEC, "fn": lambda args: calculate(args["expression"])},
-    "python_repl": {"spec": PYTHON_REPL_SPEC, "fn": lambda args: run_python(args["code"])},
-    "send_email": {
-        "spec": SEND_EMAIL_SPEC,
-        "fn": lambda args: send_email(args["to"], args["subject"], args["body"]),
-    },
-}
+ALL_TOOLS = [calculator, python_repl, send_email]
+TOOL_MAP = {t.name: t for t in ALL_TOOLS}
 
 __all__ = [
-    "calculate",
+    "calculator",
     "CalculatorError",
-    "run_python",
+    "python_repl",
     "PythonREPLError",
     "send_email",
     "EmailSendError",
-    "TOOL_REGISTRY",
+    "ALL_TOOLS",
+    "TOOL_MAP",
     "build_mcp_server",
 ]
 
 
 def build_mcp_server():
-    """Construct an MCP `Server` exposing TOOL_REGISTRY as MCP tools.
+    """Construct an MCP `Server` exposing ALL_TOOLS as MCP tools.
 
     Imported lazily so `import src.tools` doesn't hard-require the `mcp`
-    package for callers that only need the plain Python functions.
+    package for callers that only need the plain tool objects.
     """
 
     from mcp.server import Server
@@ -45,15 +40,15 @@ def build_mcp_server():
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         return [
-            Tool(name=name, description=entry["spec"]["description"], inputSchema=entry["spec"]["parameters"])
-            for name, entry in TOOL_REGISTRY.items()
+            Tool(name=t.name, description=t.description, inputSchema=t.get_input_schema().model_json_schema())
+            for t in ALL_TOOLS
         ]
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-        if name not in TOOL_REGISTRY:
+        if name not in TOOL_MAP:
             raise ValueError(f"unknown tool: {name}")
-        result = TOOL_REGISTRY[name]["fn"](arguments)
+        result = TOOL_MAP[name].invoke(arguments)
         return [TextContent(type="text", text=str(result))]
 
     return server

@@ -32,7 +32,7 @@ from src.agents.sql_agent import SQLAgent, UnsafeSQLError
 from src.agents.web_agent import WebAgent
 from src.guardrails import PIIGuard, detect_prompt_injection
 from src.telemetry import log_event
-from src.tools import TOOL_REGISTRY
+from src.tools import TOOL_MAP
 from src.utils.retry_handler import APIConnectionError, RateLimitError, async_api_rate_limit_retry
 from src.utils.schemas import AgentResponse, AgentState, RouteName
 
@@ -163,12 +163,12 @@ class AgentGraph:
         results = []
         for call in state.get("tool_calls") or []:
             name = call.get("name")
-            entry = TOOL_REGISTRY.get(name)
+            entry = TOOL_MAP.get(name)
             if entry is None:
                 results.append({"name": name, "error": f"unknown tool: {name}"})
                 continue
             try:
-                results.append({"name": name, "result": entry["fn"](call.get("args", {}))})
+                results.append({"name": name, "result": entry.invoke(call.get("args", {}))})
             except Exception as exc:
                 results.append({"name": name, "error": str(exc)})
         return {"tool_calls": None, "documents": [*(state.get("documents") or []), *results]}
