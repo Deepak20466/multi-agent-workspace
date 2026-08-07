@@ -23,6 +23,21 @@ Every agent's LLM calls (router classifier, NL→SQL generation) go through a sh
 
 Sessions are checkpointed in Redis (`thread_id=session_id`) so multi-turn conversations survive process restarts. Every response is exposed over a FastAPI HTTP API (JSON or SSE token/citation/chart streaming), a Click CLI, and an MCP stdio server for use from Claude Desktop or other MCP clients.
 
+## Prerequisites
+
+| Requirement | Needed for | Notes |
+|---|---|---|
+| **Python 3.11+** | Running the app/CLI locally | See `setup.py` (`python_requires>=3.11`) |
+| **Docker + Docker Compose** | One-command stack (app + Postgres + Redis + Chroma) | Recommended path — see `docker-compose.yml` |
+| **Postgres** | SQL agent | Only if running services outside Docker; connection via `DATABASE_URL` |
+| **Redis** | Session checkpointing, response cache, rate limiter | Degrades gracefully (in-memory fallback) if unreachable, but required for the FastAPI app's lifespan checkpointer |
+| **Chroma** | Vector store for the RAG agent | Embedded/local mode via `CHROMA_PERSIST_DIR`, or a running Chroma server via `CHROMA_HOST`/`CHROMA_PORT` |
+| **Anthropic API key** | Router classifier + generation (default LLM backend) | `ANTHROPIC_API_KEY`; not required if `LLM_BACKEND=ollama` |
+| **Tesseract OCR** *(optional)* | Scanned PDF/image ingestion | `apt-get install tesseract-ocr` / `brew install tesseract` / [UB-Mannheim build](https://github.com/UB-Mannheim/tesseract/wiki) on Windows |
+| **Ghostscript** *(optional)* | Camelot lattice-mode table extraction | Falls back to `pdfplumber`-only if absent |
+| **Cohere / Tavily API keys** *(optional)* | Top-tier reranking / web agent | Cascade falls back to local rerankers; web agent requires `TAVILY_API_KEY` to function |
+| **Ollama** *(optional)* | Fully offline LLM backend | `LLM_BACKEND=ollama` — see [Local model backend](#local-model-backend-ollama) |
+
 ## Quick Start
 
 ```bash
@@ -36,7 +51,9 @@ python main.py index --sources data/sample_documents
 python main.py agent "plot sales by region" --agent sql
 ```
 
-Or run locally without Docker:
+## Setup and Installation
+
+Run locally without Docker:
 
 ```bash
 python -m venv venv && source venv/bin/activate   # venv\Scripts\activate on Windows
