@@ -133,3 +133,4 @@ class AgentState(TypedDict, total=False):
     latency_ms: float
     blocked: bool
     block_reason: str
+    tool_calls: Optional[List[dict]]

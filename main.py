@@ -1,13 +1,16 @@
 """FastAPI entrypoint for the multi-agent workspace.
 
 Wires VectorStore -> HybridRetriever -> RAGAgent, plus the optional
-SQL/Doc/Web agents, into the LangGraph AgentRouter and exposes it over
-HTTP for the demo UI / integration tests.
+SQL/Doc/Web agents, into the LangGraph AgentGraph ("the brain") and
+exposes it over HTTP for the demo UI / integration tests. The Redis
+checkpointer is opened once in the app's lifespan handler and shared by
+every request.
 """
 
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile
@@ -15,15 +18,15 @@ from pydantic import BaseModel
 
 load_dotenv()
 
+from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+
 from src.agents.doc_agent import DocAgent
 from src.agents.rag_agent import RAGAgent
-from src.agents.router import AgentRouter
+from src.agents.router import AgentGraph
 from src.agents.sql_agent import SQLAgent
 from src.document_processing import DocumentProcessor
 from src.hybrid_retrieval import HybridRetriever
 from src.vectorstore import VectorStore
-
-app = FastAPI(title="Multi-Agent Workspace", version="3.1.0")
 
 _vector_store = VectorStore()
 _retriever = HybridRetriever(_vector_store)
@@ -34,12 +37,32 @@ _doc_agent = DocAgent(document_processor=_document_processor)
 _database_url = os.getenv("DATABASE_URL")
 _sql_agent = SQLAgent(_database_url) if _database_url else None
 
-_router = AgentRouter(rag_agent=_rag_agent, sql_agent=_sql_agent, doc_agent=_doc_agent)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        raise RuntimeError("REDIS_URL is not set; required for RedisSaver checkpointing")
+
+    async with AsyncRedisSaver.from_conn_string(redis_url) as checkpointer:
+        await checkpointer.asetup()
+        app.state.agent_graph = AgentGraph(
+            rag_agent=_rag_agent,
+            sql_agent=_sql_agent,
+            doc_agent=_doc_agent,
+            checkpointer=checkpointer,
+        )
+        yield
+
+
+app = FastAPI(title="Multi-Agent Workspace", version="3.1.0", lifespan=lifespan)
 
 
 class QueryRequest(BaseModel):
     query: str
     file_path: str | None = None
+    user_id: str = ""
+    session_id: str = ""
 
 
 @app.get("/health")
@@ -49,7 +72,12 @@ def health() -> dict:
 
 @app.post("/query")
 async def query(request: QueryRequest) -> dict:
-    response = await _router.run(request.query, file_path=request.file_path)
+    response = await app.state.agent_graph.run(
+        request.query,
+        file_path=request.file_path,
+        user_id=request.user_id,
+        session_id=request.session_id,
+    )
     return response.model_dump(mode="json")
 
 
