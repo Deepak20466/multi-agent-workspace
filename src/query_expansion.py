@@ -44,3 +44,31 @@ class QueryExpander:
 
         logger.info("expanded query '{}' into {} alternative(s)", query, len(alternatives))
         return [query, *alternatives]
+
+    @async_api_rate_limit_retry
+    async def hyde(self, query: str) -> str:
+        """Generate a Hypothetical Document Embedding: an LLM-written
+        passage that *answers* the query, as if it were an excerpt from
+        an authoritative source. Embedding this passage (instead of, or
+        alongside, the bare question) often lands closer in vector space
+        to the real supporting documents than the question itself does.
+
+        Degrades gracefully to the original `query` when no LLM is
+        configured.
+        """
+
+        if self.llm is None:
+            return query
+
+        prompt = (
+            "Write a short hypothetical passage (3-5 sentences) that would "
+            "directly answer the following question, as if it were an "
+            "excerpt from an authoritative document. Do not mention that "
+            "it is hypothetical or that you are an AI.\n\n"
+            f"Question: {query}"
+        )
+        raw = await self.llm.ainvoke(prompt)
+        passage = str(raw).strip()
+
+        logger.info("generated HyDE passage for query '{}'", query)
+        return passage or query

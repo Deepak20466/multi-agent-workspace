@@ -59,7 +59,8 @@ def format_answer_with_citations(answer: str, citations: list[Citation]) -> str:
         location = f", p.{citation.page}" if citation.page else ""
         if citation.sheet:
             location += f", sheet '{citation.sheet}'"
-        lines.append(f"[{citation.id}] {citation.source}{location} — \"{citation.quote}\"")
+        label = f"{citation.title} ({citation.source})" if citation.title else citation.source
+        lines.append(f"[{citation.id}] {label}{location} — \"{citation.quote}\"")
     return "\n".join(lines)
 
 

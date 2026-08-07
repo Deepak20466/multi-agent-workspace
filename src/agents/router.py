@@ -28,7 +28,7 @@ from langgraph.graph import END, START, StateGraph
 
 from src.agents.doc_agent import DocAgent
 from src.agents.rag_agent import RAGAgent
-from src.agents.sql_agent import SQLAgent
+from src.agents.sql_agent import SQLAgent, UnsafeSQLError
 from src.agents.web_agent import WebAgent
 from src.guardrails import PIIGuard, detect_prompt_injection
 from src.telemetry import log_event
@@ -126,24 +126,30 @@ class AgentGraph:
         response = await self.rag_agent.answer(state["query"])
         return _apply_response(response)
 
-    def _sql_node(self, state: AgentState) -> Dict:
+    async def _sql_node(self, state: AgentState) -> Dict:
         if self.sql_agent is None:
             return _apply_response(_unavailable_response(RouteName.SQL))
-        response = self.sql_agent.run_query(state["query"])
+        try:
+            response = await self.sql_agent.answer(state["query"])
+        except UnsafeSQLError as exc:
+            response = AgentResponse(answer=f"Couldn't safely answer that as SQL: {exc}", route=RouteName.SQL)
         update = _apply_response(response)
         update["sql_result"] = response.metadata.get("rows")
         return update
 
     def _doc_node(self, state: AgentState) -> Dict:
-        if self.doc_agent is None or not state.get("file_path"):
+        if self.doc_agent is None:
             return _apply_response(_unavailable_response(RouteName.DOC))
-        response = self.doc_agent.answer_from_file(state["file_path"], state["query"])
+        try:
+            response = self.doc_agent.answer_from_file(state.get("file_path"), state["query"])
+        except FileNotFoundError as exc:
+            response = AgentResponse(answer=f"Couldn't find a file to answer from: {exc}", route=RouteName.DOC)
         return _apply_response(response)
 
-    def _web_node(self, state: AgentState) -> Dict:
+    async def _web_node(self, state: AgentState) -> Dict:
         if self.web_agent is None:
             return _apply_response(_unavailable_response(RouteName.WEB))
-        response = self.web_agent.answer(state["query"])
+        response = await self.web_agent.answer(state["query"])
         return _apply_response(response)
 
     def _blocked_node(self, state: AgentState) -> Dict:

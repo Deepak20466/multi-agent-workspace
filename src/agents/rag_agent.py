@@ -1,9 +1,10 @@
-"""RAG agent: expand query -> hybrid retrieve (RAG-Fusion) -> rerank ->
-cite -> generate.
+"""RAG agent: guard input -> check cache -> expand query (multi-query +
+HyDE) -> hybrid retrieve -> RRF fuse -> Cohere rerank -> cite -> generate.
 
-Ties together query_expansion (multi-query), hybrid_retrieval
-(alpha-weighted RRF), reranking, and citation into a single grounded-
-answer pipeline used by the router for RAG-classified queries.
+Ties together guardrails (PII/prompt-injection), query_expansion
+(multi-query + HyDE), hybrid_retrieval (alpha-weighted RRF), reranking
+(Cohere with local cross-encoder fallback), and citation into a single
+grounded-answer pipeline used by the router for RAG-classified queries.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import time
 
 from src.cache import ResponseCache
 from src.citation import build_citations, format_answer_with_citations
+from src.guardrails import PIIGuard, detect_prompt_injection
 from src.hybrid_retrieval import HybridRetriever
 from src.query_expansion import QueryExpander
 from src.reranking import Reranker
@@ -26,6 +28,7 @@ class RAGAgent:
         reranker: Reranker | None = None,
         cache: ResponseCache | None = None,
         query_expander: QueryExpander | None = None,
+        pii_guard: PIIGuard | None = None,
         llm=None,
     ):
         self.retriever = retriever
@@ -33,6 +36,7 @@ class RAGAgent:
         self.cache = cache or ResponseCache()
         self.llm = llm
         self.query_expander = query_expander or QueryExpander(llm=llm)
+        self.pii_guard = pii_guard or PIIGuard()
 
     async def _generate(self, query: str, context_chunks: list[str]) -> str:
         if self.llm is None:
@@ -47,19 +51,31 @@ class RAGAgent:
         return await self.llm.ainvoke(prompt)
 
     async def answer(self, query: str, k: int = 5) -> AgentResponse:
-        cache_key = ResponseCache.make_key("rag", query)
+        if detect_prompt_injection(query):
+            log_event("rag_blocked_injection", query=query)
+            return AgentResponse(
+                answer="Request blocked: potential prompt injection detected.",
+                route=RouteName.RAG,
+            )
+        safe_query, _ = self.pii_guard.anonymize(query)
+
+        cache_key = ResponseCache.make_key("rag", safe_query)
         cached = self.cache.get(cache_key)
         if cached is not None:
-            log_event("rag_cache_hit", query=query)
+            log_event("rag_cache_hit", query=safe_query)
             return AgentResponse(**cached)
 
         start = time.perf_counter()
         with traced_call("rag"):
-            queries = await self.query_expander.multi_query(query)
+            queries = await self.query_expander.multi_query(safe_query)
+            hyde_passage = await self.query_expander.hyde(safe_query)
+            if hyde_passage not in queries:
+                queries = [*queries, hyde_passage]
+
             candidates = await self.retriever.retrieve(queries, top_k=k * 3)
-            top = self.reranker.rerank(query, candidates, top_k=k)
+            top = await self.reranker.arerank(safe_query, candidates, top_k=k)
             citations = build_citations(top)
-            raw_answer = await self._generate(query, [c.chunk.text for c in top])
+            raw_answer = await self._generate(safe_query, [c.chunk.text for c in top])
             answer_text = format_answer_with_citations(raw_answer, citations)
 
         response = AgentResponse(

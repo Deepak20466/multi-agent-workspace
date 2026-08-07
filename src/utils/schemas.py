@@ -75,6 +75,7 @@ class Citation(BaseModel):
     id: int
     type: Literal["vector", "sql", "web", "doc", "table", "ocr"]
     source: str
+    title: Optional[str] = None
     page: Optional[int] = None
     sheet: Optional[str] = None
     quote: Optional[str] = None
