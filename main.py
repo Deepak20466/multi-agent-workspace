@@ -27,7 +27,7 @@ import json
 import os
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, AsyncIterator, Literal, Optional
 
 import click
@@ -356,7 +356,7 @@ def _resolve_safe_upload_path(filename: Optional[str]) -> Path:
     if not filename or "\x00" in filename:
         raise HTTPException(status_code=400, detail="filename is required")
 
-    safe_name = Path(filename).name
+    safe_name = PureWindowsPath(filename).name
     if not safe_name or safe_name in {".", ".."}:
         raise HTTPException(status_code=400, detail="invalid filename")
     if ":" in safe_name:
