@@ -59,7 +59,7 @@ jobs:
           pip install -e .
 
       - name: Run unit tests
-        run: pytest tests/ -v --cov=src
+        run: python -m pytest tests/ -v --cov=src
 
       - name: Seed SQL eval database
         run: python eval/seed_sql_db.py
