@@ -1,8 +1,11 @@
 """Enterprise OCR processor.
 
-Rasterizes each PDF page via pdf2image/poppler (`pdftoppm`) and runs
-Tesseract over it, warning loudly (rather than failing silently) if
-either system binary is missing from PATH.
+Rasterizes each PDF page via pdf2image/poppler (`pdftoppm`/`pdfinfo`) and
+runs Tesseract over it. Both are native (non-pip) binaries that may not
+be installed in a given environment; when either is missing this raises
+`OCRDependencyError` -- a clear, typed, immediately-raised error -- up
+front rather than letting the raw pdf2image/pytesseract failure (or,
+worse, several minutes of pointless retry/backoff) crash the caller.
 """
 
 from __future__ import annotations
@@ -22,6 +25,17 @@ from src.utils.schemas import Document, SourceType
 console = Console()
 
 
+class OCRDependencyError(RuntimeError):
+    """Raised when OCR cannot proceed because a required native binary
+    (Tesseract, or poppler's pdfinfo/pdftoppm) is missing from PATH.
+
+    Deliberately a distinct type from the underlying pytesseract/
+    pdf2image exceptions so callers can catch "OCR is unavailable" as a
+    single, stable condition and decide how to degrade gracefully,
+    instead of pattern-matching on third-party exception internals.
+    """
+
+
 class OCRProcessor:
     """OCRs scanned PDFs and images via Tesseract."""
 
@@ -29,10 +43,13 @@ class OCRProcessor:
         self.lang = lang
         self.dpi = dpi
 
-        if shutil.which("tesseract") is None:
+        self.tesseract_available = shutil.which("tesseract") is not None
+        self.poppler_available = shutil.which("pdftoppm") is not None and shutil.which("pdfinfo") is not None
+
+        if not self.tesseract_available:
             logger.warning("tesseract binary not found on PATH — OCR calls will fail until it is installed")
-        if shutil.which("pdftoppm") is None:
-            logger.warning("pdftoppm (poppler-utils) not found on PATH — PDF rasterization will fail")
+        if not self.poppler_available:
+            logger.warning("pdfinfo/pdftoppm (poppler-utils) not found on PATH — PDF rasterization will fail")
 
     def _preprocess(self, image: Image.Image) -> Image.Image:
         """Grayscale + autocontrast measurably improves Tesseract accuracy."""
@@ -40,10 +57,19 @@ class OCRProcessor:
 
     @with_retry(exceptions=(RetryableError, OSError))
     def _ocr_image(self, image: Image.Image) -> str:
+        if not self.tesseract_available:
+            # Fail fast with a clear, typed error instead of burning
+            # through with_retry's exponential backoff (~5 attempts) on
+            # a binary that isn't coming back mid-retry.
+            raise OCRDependencyError(
+                "OCR requires the 'tesseract' binary, which is not installed or not on PATH."
+            )
         try:
             return pytesseract.image_to_string(image, lang=self.lang)
         except pytesseract.TesseractNotFoundError as exc:
-            raise RetryableError(str(exc)) from exc
+            # Defensive fallback for the PATH-changed-after-__init__ race;
+            # the up-front check above is the common path.
+            raise OCRDependencyError(str(exc)) from exc
 
     def process_image(self, image_path: Union[str, Path]) -> Document:
         """OCR a single image file into a Document."""
@@ -69,13 +95,25 @@ class OCRProcessor:
         """
 
         from pdf2image import convert_from_path
+        from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError
 
         pdf_path = Path(pdf_path)
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF file not found: {pdf_path}")
 
+        if not self.poppler_available:
+            raise OCRDependencyError(
+                "OCR requires poppler's 'pdfinfo'/'pdftoppm' binaries to rasterize PDF pages, "
+                "which are not installed or not on PATH."
+            )
+
         logger.info("rasterizing {} at {} dpi", pdf_path, self.dpi)
-        pages = convert_from_path(str(pdf_path), dpi=self.dpi)
+        try:
+            pages = convert_from_path(str(pdf_path), dpi=self.dpi)
+        except (PDFInfoNotInstalledError, PDFPageCountError) as exc:
+            # Defensive fallback for the PATH-changed-after-__init__ race;
+            # the up-front check above is the common path.
+            raise OCRDependencyError(str(exc)) from exc
 
         documents: List[Document] = []
         for page_number, page_image in enumerate(pages, start=1):

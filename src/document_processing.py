@@ -10,6 +10,7 @@ overlapping Chunks ready for embedding.
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -20,7 +21,7 @@ from presidio_anonymizer import AnonymizerEngine
 from rich.console import Console
 
 from src.parsers.excel_parser import ExcelLoader
-from src.parsers.ocr_parser import OCRProcessor
+from src.parsers.ocr_parser import OCRDependencyError, OCRProcessor
 from src.parsers.table_parser import TableExtractor
 from src.utils.schemas import Chunk, Document, PIIEntity, SourceType
 
@@ -32,6 +33,20 @@ EXCEL_EXTENSIONS = {".xlsx", ".xls"}
 PDF_EXTENSIONS = {".pdf"}
 
 SCANNED_PDF_CHAR_THRESHOLD = 100
+
+
+def _stable_chunk_id(source_path: str, chunk_index: int) -> str:
+    """Deterministic chunk_id derived from (source_path, chunk_index).
+
+    Chunk.chunk_id defaults to a fresh random uuid4, which makes
+    VectorStore.add_chunks()'s Chroma upsert() (keyed by id) unable to
+    recognize a re-indexed file's chunks as the same ones it saw
+    before -- every re-index silently piles up duplicate copies of the
+    same content instead of updating them in place. Deriving the id
+    from stable identity (same file, same chunk position) instead of
+    randomness makes re-indexing idempotent.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source_path}::{chunk_index}"))
 
 DEFAULT_PII_ENTITIES = [
     "PERSON",
@@ -125,7 +140,40 @@ class DocumentProcessor:
                     file_path,
                     SCANNED_PDF_CHAR_THRESHOLD,
                 )
-                documents = self.ocr_processor.process_pdf(file_path)
+                try:
+                    documents = self.ocr_processor.process_pdf(file_path)
+                except OCRDependencyError as exc:
+                    if text.strip():
+                        # This PDF isn't actually a scanned image -- it has a
+                        # real (if short) text layer, it just tripped the
+                        # length heuristic above. OCR being unavailable
+                        # shouldn't lose ordinary, non-scanned documents;
+                        # ingest the text layer we already have instead of
+                        # crashing. `ocr_skipped`/`ocr_error` make it explicit
+                        # in metadata that this is *not* an OCR pass, so
+                        # nothing downstream mistakes it for one.
+                        logger.warning(
+                            "OCR unavailable for {} ({}); falling back to the {} char(s) of text already extracted",
+                            file_path,
+                            exc,
+                            len(text.strip()),
+                        )
+                        documents = [
+                            Document(
+                                source_path=str(file_path),
+                                source_type=SourceType.PDF,
+                                text=text,
+                                metadata={"ocr_skipped": True, "ocr_error": str(exc)},
+                            )
+                        ]
+                    else:
+                        # No text layer at all and OCR can't run: there is
+                        # nothing to ingest. Surface a clear, typed error
+                        # rather than silently producing an empty/blank
+                        # document that would look like a successful (if
+                        # content-free) ingest.
+                        logger.error("OCR unavailable for {} and it has no extractable text layer: {}", file_path, exc)
+                        raise
             else:
                 documents = [Document(source_path=str(file_path), source_type=SourceType.PDF, text=text)]
             documents.extend(self.table_extractor.extract(file_path))
@@ -172,6 +220,7 @@ class DocumentProcessor:
             if chunk_text:
                 chunks.append(
                     Chunk(
+                        chunk_id=_stable_chunk_id(document.source_path, index),
                         doc_id=document.doc_id,
                         text=chunk_text,
                         chunk_index=index,

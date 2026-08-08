@@ -1,12 +1,30 @@
 import pytest
 
 from src.document_processing import DocumentProcessor
+from src.parsers.ocr_parser import OCRDependencyError
 from src.utils.schemas import Document, SourceType
 
 
 @pytest.fixture
 def processor(document_processor: DocumentProcessor) -> DocumentProcessor:
     return document_processor
+
+
+@pytest.fixture
+def ocr_deps_unavailable(processor):
+    """Force the shared processor's OCRProcessor to believe neither
+    tesseract nor poppler are installed, regardless of what's actually on
+    the test machine's PATH -- so these tests deterministically exercise
+    the "OCR dependencies missing" path. Restored afterwards since
+    `processor` is a session-scoped fixture shared across the whole run.
+    """
+
+    ocr = processor.ocr_processor
+    original = (ocr.tesseract_available, ocr.poppler_available)
+    ocr.tesseract_available = False
+    ocr.poppler_available = False
+    yield
+    ocr.tesseract_available, ocr.poppler_available = original
 
 
 def test_chunk_document_respects_overlap(processor):
@@ -68,3 +86,91 @@ def test_redact_pii_noop_when_disabled(processor):
 
     assert redacted == text
     assert entities == []
+
+
+# --- OCR/Poppler/Ghostscript dependency handling ----------------------------
+#
+# Regression coverage for: PDF ingestion could crash on *ordinary*
+# documents, not just intentionally-scanned ones. `_is_scanned_pdf` routes
+# any PDF whose extracted text layer is under `SCANNED_PDF_CHAR_THRESHOLD`
+# chars into `OCRProcessor.process_pdf`, which shells out to poppler via
+# pdf2image. When poppler wasn't on PATH, that raised a raw, unhandled
+# `pdf2image.exceptions.PDFInfoNotInstalledError` straight out of
+# `DocumentProcessor.load()` -- for *any* short-but-real PDF, not only
+# scanned ones.
+
+
+def test_load_pdf_normal_document_ingests_without_ocr(processor, tmp_path, make_pdf_bytes, ocr_deps_unavailable):
+    """A normal PDF with a real, sufficiently long text layer never
+    touches the OCR path at all, so it must ingest fine even when OCR
+    dependencies are completely unavailable.
+    """
+
+    pdf_path = tmp_path / "normal.pdf"
+    pdf_path.write_bytes(make_pdf_bytes("This is a normal PDF with plenty of real extractable text content. " * 5))
+
+    docs = processor.load(pdf_path)
+
+    pdf_doc = next(d for d in docs if d.source_type == SourceType.PDF)
+    assert "normal PDF" in pdf_doc.text
+    assert "ocr_skipped" not in pdf_doc.metadata
+
+
+def test_load_pdf_requiring_ocr_raises_clear_error_when_ocr_unavailable(
+    processor, tmp_path, make_pdf_bytes, ocr_deps_unavailable
+):
+    """A PDF with no real text layer genuinely needs OCR. When OCR
+    dependencies are unavailable there is nothing to ingest, so this must
+    raise the clear, typed `OCRDependencyError` -- not crash with a raw
+    pdf2image/pytesseract internal exception, and not silently produce an
+    empty document that looks like a successful ingest.
+    """
+
+    pdf_path = tmp_path / "scanned.pdf"
+    pdf_path.write_bytes(make_pdf_bytes(""))
+
+    with pytest.raises(OCRDependencyError):
+        processor.load(pdf_path)
+
+
+def test_load_pdf_short_text_falls_back_to_extracted_text_when_ocr_unavailable(
+    processor, tmp_path, make_pdf_bytes, ocr_deps_unavailable
+):
+    """A PDF that merely trips the length heuristic (real text, just
+    short) is *not* actually a scanned document. If OCR is unavailable,
+    ingestion must fall back to the text layer that was already
+    extracted instead of losing the document -- and must mark that
+    clearly in metadata rather than pretending a real OCR pass happened.
+    """
+
+    pdf_path = tmp_path / "short.pdf"
+    pdf_path.write_bytes(make_pdf_bytes("Short doc"))
+
+    docs = processor.load(pdf_path)
+
+    pdf_doc = next(d for d in docs if d.source_type == SourceType.PDF)
+    assert "Short doc" in pdf_doc.text
+    assert pdf_doc.metadata["ocr_skipped"] is True
+    assert "ocr_error" in pdf_doc.metadata
+
+
+def test_load_pdf_does_not_leak_raw_pdf2image_crash(processor, tmp_path, make_pdf_bytes, ocr_deps_unavailable):
+    """Regression test for the reported crash: ingesting a short-text PDF
+    with poppler unavailable used to propagate a raw, unhandled
+    `pdf2image.exceptions.PDFInfoNotInstalledError` out of
+    `DocumentProcessor.load()`. It must now be handled -- either via the
+    text-layer fallback above or a clear `OCRDependencyError` -- but the
+    raw third-party exception must never escape.
+    """
+
+    from pdf2image.exceptions import PDFInfoNotInstalledError
+
+    pdf_path = tmp_path / "short.pdf"
+    pdf_path.write_bytes(make_pdf_bytes("Short doc"))
+
+    try:
+        processor.load(pdf_path)
+    except PDFInfoNotInstalledError:
+        pytest.fail("raw pdf2image.exceptions.PDFInfoNotInstalledError leaked out of DocumentProcessor.load()")
+    except OCRDependencyError:
+        pass  # acceptable: a clear, typed error instead of an unhandled crash

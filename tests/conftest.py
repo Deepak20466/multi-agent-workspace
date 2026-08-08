@@ -5,6 +5,72 @@ import pytest
 from src.document_processing import DocumentProcessor
 
 
+@pytest.fixture
+def make_pdf_bytes():
+    """Factory returning raw bytes for a minimal, valid, single-page PDF
+    containing the given text.
+
+    No PDF-writing library (reportlab, fpdf, ...) is a project
+    dependency, so this hand-builds the PDF object graph -- including a
+    correct byte-offset xref table -- directly. pdfplumber/pdfminer can
+    then parse it exactly like a real PDF without needing any external
+    OCR/rasterization tooling (poppler, ghostscript, tesseract), which is
+    the point: these tests need to control whether a PDF "has a text
+    layer" independently of what's installed on the test machine.
+    """
+
+    def _make(text: str) -> bytes:
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> "
+            b"/MediaBox [0 0 612 792] /Contents 5 0 R >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ]
+
+        lines: list[str] = []
+        line: list[str] = []
+        length = 0
+        for word in text.split():
+            line.append(word)
+            length += len(word) + 1
+            if length > 60:
+                lines.append(" ".join(line))
+                line, length = [], 0
+        if line:
+            lines.append(" ".join(line))
+
+        stream = "BT /F1 12 Tf 50 750 Td 14 TL\n"
+        for one_line in lines:
+            escaped = one_line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            stream += f"({escaped}) Tj T*\n"
+        stream += "ET"
+        stream_bytes = stream.encode("latin-1")
+        objects.append(b"<< /Length %d >>\nstream\n" % len(stream_bytes) + stream_bytes + b"\nendstream")
+
+        out = bytearray(b"%PDF-1.4\n")
+        offsets = [0]
+        for i, obj in enumerate(objects, start=1):
+            offsets.append(len(out))
+            out += f"{i} 0 obj\n".encode() + obj + b"\nendobj\n"
+
+        xref_offset = len(out)
+        n = len(objects) + 1
+        out += f"xref\n0 {n}\n".encode() + b"0000000000 65535 f \n"
+        for off in offsets[1:]:
+            out += f"{off:010d} 00000 n \n".encode()
+        out += (
+            b"trailer\n"
+            + f"<< /Size {n} /Root 1 0 R >>\n".encode()
+            + b"startxref\n"
+            + f"{xref_offset}\n".encode()
+            + b"%%EOF"
+        )
+        return bytes(out)
+
+    return _make
+
+
 @pytest.fixture(scope="session")
 def document_processor() -> DocumentProcessor:
     """Shared DocumentProcessor instance.
@@ -64,6 +130,20 @@ def app_module():
     _patch_chroma(mp)
 
     import main
+
+    # `import main` just ran `load_dotenv()`, which -- unlike
+    # monkeypatch.setenv -- writes straight into os.environ with nothing
+    # to undo it later. If a developer's local .env configures a
+    # non-default LLM_BACKEND/OLLAMA_MODEL/OLLAMA_BASE_URL (e.g. for
+    # local Ollama use), that leaks into every test for the rest of this
+    # session once this session-scoped fixture is first created,
+    # regardless of what the shell environment looked like beforehand.
+    # Strip them back out so build_llm()'s default ("anthropic" unless
+    # a caller explicitly configures otherwise) is what tests actually
+    # observe -- matching a machine with no .env overrides at all.
+    mp.delenv("LLM_BACKEND", raising=False)
+    mp.delenv("OLLAMA_MODEL", raising=False)
+    mp.delenv("OLLAMA_BASE_URL", raising=False)
 
     yield main
 

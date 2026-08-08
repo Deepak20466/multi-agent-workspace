@@ -173,3 +173,30 @@ def test_ingest_endpoint_accepts_legitimate_upload(app_module, sandboxed_upload_
     body = response.json()
     assert body["file"] == "notes.txt"
     assert (sandboxed_upload_root / "notes.txt").read_bytes() == b"hello world"
+
+
+def test_ingest_endpoint_returns_clear_error_when_ocr_unavailable(app_module, sandboxed_upload_root, monkeypatch):
+    """A document that genuinely needs OCR, on a server with no usable
+    Tesseract/Poppler install, must come back as a clear 422 -- not an
+    unhandled 500 from a raw pdf2image/pytesseract exception.
+    """
+
+    from src.parsers.ocr_parser import OCRDependencyError
+
+    def _raise(path):
+        raise OCRDependencyError("tesseract binary not found on PATH")
+
+    monkeypatch.setattr(
+        app_module,
+        "_document_processor",
+        type("StubProcessor", (), {"process": staticmethod(_raise)})(),
+    )
+
+    client = TestClient(app_module.app)
+    response = client.post(
+        "/ingest",
+        files={"file": ("scan.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    assert response.status_code == 422
+    assert "OCR" in response.json()["detail"]

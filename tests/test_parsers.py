@@ -1,10 +1,11 @@
+import time
 from unittest.mock import patch
 
 import openpyxl
 import pytest
 
 from src.parsers.excel_parser import ExcelLoader
-from src.parsers.ocr_parser import OCRProcessor
+from src.parsers.ocr_parser import OCRDependencyError, OCRProcessor
 from src.parsers.table_parser import TableExtractor
 from src.utils.schemas import SourceType
 
@@ -61,6 +62,54 @@ def test_ocr_processor_warns_when_tesseract_missing():
             assert mock_logger.warning.called
 
 
+def test_ocr_processor_process_image_raises_clear_error_when_tesseract_missing(tmp_path):
+    """Missing tesseract must surface as the typed `OCRDependencyError`,
+    not the raw `pytesseract.TesseractNotFoundError`, and must fail fast
+    rather than retrying a binary that isn't coming back mid-retry.
+    """
+
+    from PIL import Image
+
+    image_path = tmp_path / "img.png"
+    Image.new("RGB", (10, 10), color="white").save(image_path)
+
+    with patch("src.parsers.ocr_parser.shutil.which", return_value=None):
+        processor = OCRProcessor()
+
+    start = time.perf_counter()
+    with pytest.raises(OCRDependencyError):
+        processor.process_image(image_path)
+    elapsed = time.perf_counter() - start
+
+    # with_retry's exponential backoff (~5 attempts, up to 10s each) would
+    # take many seconds if this were still retried; a missing binary must
+    # be reported immediately instead.
+    assert elapsed < 2.0
+
+
+def test_ocr_processor_process_pdf_raises_clear_error_when_poppler_missing(tmp_path, make_pdf_bytes):
+    """The reported crash: `OCRProcessor.process_pdf` used to let
+    pdf2image's raw `PDFInfoNotInstalledError` escape unhandled when
+    poppler wasn't on PATH. It must now raise the typed, clear
+    `OCRDependencyError` instead.
+    """
+
+    pdf_path = tmp_path / "scan.pdf"
+    pdf_path.write_bytes(make_pdf_bytes("irrelevant"))
+
+    with patch("src.parsers.ocr_parser.shutil.which", return_value=None):
+        processor = OCRProcessor()
+        with pytest.raises(OCRDependencyError):
+            processor.process_pdf(pdf_path)
+
+
+def test_ocr_processor_reports_dependency_availability(tmp_path):
+    with patch("src.parsers.ocr_parser.shutil.which", return_value=None):
+        processor = OCRProcessor()
+    assert processor.tesseract_available is False
+    assert processor.poppler_available is False
+
+
 def test_table_extractor_table_to_text_renders_rows():
     table = [["name", "age"], ["Alice", "30"], ["Bob", "25"]]
     text = TableExtractor._table_to_text(table)
@@ -77,6 +126,21 @@ def test_table_extractor_missing_file_raises(tmp_path):
         TableExtractor().extract(tmp_path / "missing.pdf")
 
 
+def test_table_extractor_extracts_from_real_pdf_without_crashing(tmp_path, make_pdf_bytes):
+    """End-to-end (no mocking): running the real camelot/pdfplumber code
+    path against an ordinary generated PDF must never crash ingestion,
+    regardless of which rasterization backends happen to be installed in
+    this environment.
+    """
+
+    pdf_path = tmp_path / "doc.pdf"
+    pdf_path.write_bytes(make_pdf_bytes("Just a normal document with no tables in it at all."))
+
+    documents = TableExtractor().extract(pdf_path)
+
+    assert isinstance(documents, list)
+
+
 def test_table_extractor_falls_back_to_pdfplumber_on_ghostscript_error(tmp_path):
     pdf_path = tmp_path / "doc.pdf"
     pdf_path.write_bytes(b"%PDF-1.4 fake")
@@ -90,11 +154,28 @@ def test_table_extractor_falls_back_to_pdfplumber_on_ghostscript_error(tmp_path)
     assert result == []
 
 
-def test_table_extractor_reraises_non_ghostscript_runtime_error(tmp_path):
+def test_table_extractor_falls_back_to_pdfplumber_on_camelot_image_conversion_error(tmp_path):
+    """Regression test: camelot's actual failure mode when none of its
+    rasterization backends (pdfium/poppler/ghostscript) are usable is
+    `camelot.backends.image_conversion.ImageConversionError`, a
+    `ValueError` subclass -- *not* the `RuntimeError` the old except
+    clause pattern-matched on. That mismatch meant the "fall back to
+    pdfplumber" path was dead code and the real error crashed ingestion.
+    A bare `OSError` (what the ghostscript/poppler backends raise before
+    camelot wraps it) must also be handled.
+    """
+
     pdf_path = tmp_path / "doc.pdf"
     pdf_path.write_bytes(b"%PDF-1.4 fake")
 
     extractor = TableExtractor()
-    with patch.object(extractor, "_extract_with_camelot", side_effect=RuntimeError("something else broke")):
-        with pytest.raises(RuntimeError):
-            extractor.extract(pdf_path)
+    for exc in (
+        ValueError("Image conversion failed with image conversion backend 'ghostscript'"),
+        OSError("Ghostscript is not installed."),
+    ):
+        with patch.object(extractor, "_extract_with_camelot", side_effect=exc):
+            with patch.object(extractor, "_extract_with_pdfplumber", return_value=[]) as mock_fallback:
+                result = extractor.extract(pdf_path)
+
+        mock_fallback.assert_called_once()
+        assert result == []

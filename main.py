@@ -53,6 +53,7 @@ from src.agents.web_agent import WebAgent
 from src.cache import ResponseCache
 from src.config import load_config
 from src.document_processing import DocumentProcessor
+from src.parsers.ocr_parser import OCRDependencyError
 from src.hybrid_retrieval import HybridRetriever
 from src.middleware import APIKeyMiddleware, RateLimiter
 from src.reranking import Reranker
@@ -375,7 +376,13 @@ def ingest(file: UploadFile) -> dict:
     dest = _resolve_safe_upload_path(file.filename)
     dest.write_bytes(file.file.read())
 
-    _, chunks = _document_processor.process(dest)
+    try:
+        _, chunks = _document_processor.process(dest)
+    except OCRDependencyError as exc:
+        # A scanned/image-only document that genuinely needs OCR, but the
+        # server has no usable Tesseract/Poppler install -- a clear 422 for
+        # the client instead of an opaque, unhandled 500.
+        raise HTTPException(status_code=422, detail=f"OCR could not be performed: {exc}") from exc
     n_added = _vector_store.add_chunks(chunks)
     _retriever.index_corpus(chunks)
 

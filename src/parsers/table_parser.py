@@ -1,10 +1,16 @@
 """Enterprise table extractor.
 
 Camelot in lattice mode is the primary strategy (accurate for ruled
-tables), but it hard-depends on a native Ghostscript install. If
-Ghostscript is missing, fall back to pdfplumber so table extraction
-still works — just less precisely — instead of failing the whole
-ingest.
+tables), but its line-detection needs to rasterize each page and hard-
+depends on a native image-conversion backend (pdfium, poppler, or
+Ghostscript). If none of those are usable -- e.g. Ghostscript/poppler
+missing and pdfium failing for some reason -- fall back to pdfplumber
+so table extraction still works, just less precisely, instead of
+failing the whole ingest. Camelot wraps that failure as its own
+`ImageConversionError` (a `ValueError` subclass) after trying every
+backend, but a bare `OSError`/`RuntimeError` from a lower layer is
+caught too, since camelot's exact exception type isn't a stable
+contract across versions.
 """
 
 from __future__ import annotations
@@ -34,15 +40,12 @@ class TableExtractor:
 
         try:
             documents = self._extract_with_camelot(pdf_path)
-        except RuntimeError as exc:
-            if "ghostscript" in str(exc).lower():
-                logger.warning("Ghostscript not found, falling back to pdfplumber for {}", pdf_path)
-                console.print(
-                    f"[yellow]Ghostscript missing[/yellow] — falling back to pdfplumber for {pdf_path.name}"
-                )
-                documents = self._extract_with_pdfplumber(pdf_path)
-            else:
-                raise
+        except (RuntimeError, OSError, ValueError) as exc:
+            logger.warning("camelot table extraction unavailable for {} ({}); falling back to pdfplumber", pdf_path, exc)
+            console.print(
+                f"[yellow]camelot unavailable[/yellow] ({exc}) — falling back to pdfplumber for {pdf_path.name}"
+            )
+            documents = self._extract_with_pdfplumber(pdf_path)
 
         logger.info("extracted {} table(s) from {}", len(documents), pdf_path)
         console.print(f"[green]Extracted[/green] {len(documents)} table(s) from [bold]{pdf_path.name}[/bold]")
