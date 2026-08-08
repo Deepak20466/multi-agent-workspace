@@ -69,6 +69,7 @@ class RetrievalSettings(BaseModel):
     use_rerank: bool = True
     rerank_model: str = "rerank-english-v3.0"
     rerank_top_k: int = 5
+    rerank_score_threshold: float = 0.0
     use_flashrank: bool = True
     flashrank_model: str = "ms-marco-MiniLM-L-12-v2"
 
