@@ -2,9 +2,9 @@ name: RAGAS Eval v3.1
 
 on:
   pull_request:
-    branches: [main]
+    branches: [master]
   push:
-    branches: [main]
+    branches: [master]
 
 jobs:
   ragas-eval:
