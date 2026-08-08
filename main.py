@@ -94,7 +94,12 @@ _rag_agent = RAGAgent(
     ollama_model=_config.agents.ollama_model,
     ollama_base_url=_config.agents.ollama_base_url,
 )
-_doc_agent = DocAgent(document_processor=_document_processor)
+_doc_agent = DocAgent(
+    document_processor=_document_processor,
+    llm_backend=_config.agents.llm_backend,
+    ollama_model=_config.agents.ollama_model,
+    ollama_base_url=_config.agents.ollama_base_url,
+)
 _web_agent = WebAgent(max_results=_config.web.max_results)
 
 _database_url = _config.sql.database_url or os.getenv("DATABASE_URL")

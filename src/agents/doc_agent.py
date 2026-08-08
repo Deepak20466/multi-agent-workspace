@@ -11,6 +11,7 @@ a filename (*.pdf/.xlsx/.png/...) out of the query text itself, so
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from pathlib import Path
@@ -34,6 +35,23 @@ _FILE_REF_RE = re.compile(rf"[\w./\\-]+\.(?:{_EXT_PATTERN})\b", re.IGNORECASE)
 
 DEFAULT_UPLOAD_DIR = Path("data/uploads")
 
+DOC_MODEL = os.getenv("DOC_MODEL", "claude-haiku-4-5")
+# Mirrors RAGAgent's RAG_MAX_TOKENS / SQLAgent's implicit bound: caps the
+# single generation call this agent makes so a local/CPU Ollama backend
+# doesn't run unbounded on a "summarize this document" prompt.
+DOC_MAX_TOKENS = int(os.getenv("DOC_MAX_TOKENS", "500"))
+
+
+def _extract_text(response: object) -> str:
+    """Agent-level `llm` objects in this codebase are expected to return
+    a plain string from `.invoke`, but a raw langchain ChatModel returns
+    a message object instead — accept either. Mirrors the identically-
+    named helper in rag_agent.py/sql_agent.py.
+    """
+
+    content = getattr(response, "content", None)
+    return str(content) if content is not None else str(response)
+
 
 def extract_file_refs(text: str) -> list[str]:
     """Return every filename-with-supported-extension mentioned in `text`,
@@ -50,8 +68,25 @@ class DocAgent:
         llm=None,
         document_processor: DocumentProcessor | None = None,
         upload_dir: Path | str = DEFAULT_UPLOAD_DIR,
+        llm_backend: str | None = None,
+        ollama_model: str | None = None,
+        ollama_base_url: str | None = None,
     ):
         self.reranker = reranker or Reranker()
+        if llm is None and llm_backend:
+            # Explicit opt-in only, same contract as RAGAgent/SQLAgent --
+            # callers that construct DocAgent without a backend (e.g.
+            # eval/tests) keep the current llm=None stub-answer behavior
+            # unchanged.
+            from src.llm_factory import build_llm
+
+            llm = build_llm(
+                DOC_MODEL,
+                backend=llm_backend,
+                ollama_model=ollama_model,
+                ollama_base_url=ollama_base_url,
+                max_tokens=DOC_MAX_TOKENS,
+            )
         self.llm = llm
         self.document_processor = document_processor or DocumentProcessor()
         self.upload_dir = Path(upload_dir)
@@ -90,7 +125,7 @@ class DocAgent:
             + "\n".join(f"[{i}] {c}" for i, c in enumerate(context_chunks, start=1))
             + f"\n\nQuestion: {query}"
         )
-        return self.llm.invoke(prompt)
+        return _extract_text(self.llm.invoke(prompt))
 
     @staticmethod
     def _to_markdown_table(top: list[RetrievedChunk], citations: list) -> str:

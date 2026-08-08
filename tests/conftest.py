@@ -1,8 +1,30 @@
+import urllib.request
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.document_processing import DocumentProcessor
+
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "qwen2.5:0.5b"
+
+
+def _ollama_reachable(base_url: str = OLLAMA_BASE_URL, timeout: float = 1.0) -> bool:
+    """Probe a local Ollama server without pulling in a dependency just
+    for the check -- used to skip (not fail) the real-generation
+    integration tests on machines/CI without Ollama running.
+    """
+
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.fixture(scope="session")
+def ollama_available() -> bool:
+    return _ollama_reachable()
 
 
 @pytest.fixture

@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.utils.schemas import AgentResponse, Citation, RouteName
+from src.utils.schemas import AgentResponse, Citation, RetrievedChunk, RouteName
 
 
 @pytest.fixture(scope="module")
@@ -137,3 +137,72 @@ async def test_web_search_tool_uses_web_agent(mcp_module, monkeypatch):
 
     fake_web_agent.answer.assert_awaited_once_with("today's news")
     assert "[1] https://example.com" in result
+
+
+# --- LLM wiring -------------------------------------------------------------
+#
+# Regression coverage for: the MCP server built its RAGAgent/DocAgent
+# singletons with no `llm_backend` at all (it didn't even call
+# `load_config()`), so both silently stayed on the `llm=None` stub-answer
+# path -- MCP tool responses were never actually LLM-generated even though
+# config.yaml configures a real (Ollama) backend, identical to what main.py
+# already wires RAGAgent/SQLAgent with.
+
+
+def test_mcp_rag_agent_is_wired_to_configured_llm(mcp_module):
+    """The module-level `_rag_agent` singleton (what `search_docs` actually
+    calls) must have a real `llm`, built via the *same* `src.llm_factory`
+    used everywhere else -- not `None`, and not a bespoke Ollama client
+    constructed only for MCP.
+    """
+
+    from src.llm_factory import DEFAULT_OLLAMA_MODEL
+
+    assert mcp_module._rag_agent.llm is not None
+    assert type(mcp_module._rag_agent.llm).__module__.startswith("langchain_ollama")
+    assert mcp_module._rag_agent.llm.model in {mcp_module._config.agents.ollama_model, DEFAULT_OLLAMA_MODEL}
+
+
+def test_mcp_doc_agent_is_wired_to_configured_llm(mcp_module):
+    assert mcp_module._doc_agent.llm is not None
+    assert type(mcp_module._doc_agent.llm).__module__.startswith("langchain_ollama")
+
+
+async def test_search_docs_tool_real_ollama_generates_genuine_answer(mcp_module, monkeypatch, ollama_available):
+    """Real, unmocked local-Ollama generation through the actual
+    `search_docs` MCP tool (skipped if Ollama isn't reachable): retrieval
+    is faked (deterministic, no Chroma/embedding model needed) but the
+    generation step hits the real configured LLM, proving the MCP-exposed
+    RAG path -- not just RAGAgent in isolation -- produces a genuine
+    generated answer instead of the "Based on the retrieved context:" stub.
+    """
+
+    if not ollama_available:
+        pytest.skip("Ollama not reachable at localhost:11434")
+
+    from src.utils.schemas import Chunk
+
+    chunk = Chunk(
+        doc_id="policy-1",
+        chunk_id="policy-1-0",
+        text="Our refund policy allows returns within 30 days of purchase.",
+        chunk_index=0,
+        metadata={"source_path": "policy.txt"},
+    )
+    monkeypatch.setattr(
+        mcp_module._rag_agent.retriever,
+        "retrieve",
+        AsyncMock(return_value=[RetrievedChunk(chunk=chunk, vector_score=0.9, rerank_score=0.9)]),
+    )
+    # Multi-query/HyDE are extra real LLM calls that only add latency here
+    # (retrieval is already faked to always return the one relevant
+    # chunk); disabling them keeps this test fast without touching what's
+    # under test -- the real generation call.
+    monkeypatch.setattr(mcp_module._rag_agent, "use_multi_query", False)
+    monkeypatch.setattr(mcp_module._rag_agent, "use_hyde", False)
+
+    result = await mcp_module.search_docs("How many days do customers have to return an item?")
+
+    assert "Based on the retrieved context:" not in result
+    assert "Citations:" in result
+    assert "[1] policy.txt" in result

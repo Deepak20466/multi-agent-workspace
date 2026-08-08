@@ -24,6 +24,7 @@ from src.agents.doc_agent import DocAgent
 from src.agents.rag_agent import RAGAgent
 from src.agents.sql_agent import SQLAgent, UnsafeSQLError
 from src.agents.web_agent import WebAgent
+from src.config import load_config
 from src.document_processing import DocumentProcessor
 from src.guardrails import PIIGuard, guard_input, guard_output
 from src.hybrid_retrieval import HybridRetriever
@@ -33,11 +34,27 @@ from src.vectorstore import VectorStore
 
 mcp = FastMCP("multi-agent-workspace")
 
+_config = load_config()
 _pii_guard = PIIGuard()
 _vector_store = VectorStore()
 _retriever = HybridRetriever(_vector_store)
-_rag_agent = RAGAgent(retriever=_retriever, pii_guard=_pii_guard)
-_doc_agent = DocAgent(document_processor=DocumentProcessor())
+# Same llm_backend/ollama_model/ollama_base_url config main.py wires its
+# RAGAgent/DocAgent with -- MCP tools previously left these unset, which
+# silently left both agents on their llm=None stub-answer path even when
+# config.yaml configures a real (e.g. Ollama) backend.
+_rag_agent = RAGAgent(
+    retriever=_retriever,
+    pii_guard=_pii_guard,
+    llm_backend=_config.agents.llm_backend,
+    ollama_model=_config.agents.ollama_model,
+    ollama_base_url=_config.agents.ollama_base_url,
+)
+_doc_agent = DocAgent(
+    document_processor=DocumentProcessor(),
+    llm_backend=_config.agents.llm_backend,
+    ollama_model=_config.agents.ollama_model,
+    ollama_base_url=_config.agents.ollama_base_url,
+)
 _web_agent = WebAgent()
 
 _database_url = os.getenv("DATABASE_URL")
