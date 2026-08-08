@@ -4,7 +4,8 @@ Wires VectorStore -> HybridRetriever -> RAGAgent, plus the optional
 SQL/Doc/Web agents, into the LangGraph AgentGraph ("the brain") and
 exposes it over HTTP for the demo UI / integration tests. The Redis
 checkpointer is opened once in the app's lifespan handler and shared by
-every request.
+every request when REDIS_URL is reachable; otherwise it falls back to
+an in-memory checkpointer scoped to this process (see `lifespan`).
 
 `POST /api/v1/agent` is the primary API: it accepts `agent_type="auto"`
 (routed by the LangGraph classifier) or an explicit route, and can
@@ -70,6 +71,14 @@ _document_processor = DocumentProcessor(
 )
 _response_cache = ResponseCache(ttl_seconds=_config.cache.ttl)
 _reranker = Reranker(use_flashrank=_config.retrieval.use_flashrank, flashrank_model=_config.retrieval.flashrank_model)
+if _config.retrieval.use_rerank:
+    # Force the reranker's (local cross-encoder) model to load now, at
+    # boot, instead of lazily on the first real request -- torch model
+    # init measured at ~10s cold, which otherwise silently penalizes
+    # whichever user request happens to land first. The local
+    # cross-encoder is always a reachable fallback tier even when
+    # Cohere/flashrank are primary, so warming it is never wasted work.
+    _ = _reranker.model
 _rag_agent = RAGAgent(
     retriever=_retriever,
     reranker=_reranker,
@@ -77,6 +86,12 @@ _rag_agent = RAGAgent(
     top_k=_config.retrieval.top_k,
     rerank_top_k=_config.retrieval.rerank_top_k,
     use_rerank=_config.retrieval.use_rerank,
+    use_multi_query=_config.retrieval.use_multi_query,
+    use_hyde=_config.retrieval.use_hyde,
+    rerank_score_threshold=_config.retrieval.rerank_score_threshold,
+    llm_backend=_config.agents.llm_backend,
+    ollama_model=_config.agents.ollama_model,
+    ollama_base_url=_config.agents.ollama_base_url,
 )
 _doc_agent = DocAgent(document_processor=_document_processor)
 _web_agent = WebAgent(max_results=_config.web.max_results)
@@ -100,23 +115,41 @@ _rate_limiter = RateLimiter(redis_url=os.getenv("REDIS_URL"), capacity=60, windo
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Opens the Redis checkpointer when REDIS_URL is set and reachable,
+    for session continuity shared across processes/replicas. Falls back
+    to AgentGraph's in-memory MemorySaver (scoped to this process) when
+    Redis is unset or unreachable, mirroring `_build_cli_agent_graph`
+    below -- local dev works without Redis, at the cost of sessions not
+    surviving a server restart.
+    """
     redis_url = os.getenv("REDIS_URL")
-    if not redis_url:
-        raise RuntimeError("REDIS_URL is not set; required for RedisSaver checkpointing")
+    checkpointer = None
+    redis_cm = None
+    if redis_url:
+        try:
+            redis_cm = AsyncRedisSaver.from_conn_string(redis_url)
+            checkpointer = await redis_cm.__aenter__()
+            await checkpointer.asetup()
+        except Exception as exc:
+            logger.warning("Redis checkpointer unavailable ({}); using in-memory session state.", exc)
+            checkpointer = None
+            redis_cm = None
 
-    async with AsyncRedisSaver.from_conn_string(redis_url) as checkpointer:
-        await checkpointer.asetup()
-        app.state.agent_graph = AgentGraph(
-            rag_agent=_rag_agent,
-            sql_agent=_sql_agent,
-            doc_agent=_doc_agent,
-            web_agent=_web_agent,
-            checkpointer=checkpointer,
-            llm_backend=_config.agents.llm_backend,
-            ollama_model=_config.agents.ollama_model,
-            ollama_base_url=_config.agents.ollama_base_url,
-        )
+    app.state.agent_graph = AgentGraph(
+        rag_agent=_rag_agent,
+        sql_agent=_sql_agent,
+        doc_agent=_doc_agent,
+        web_agent=_web_agent,
+        checkpointer=checkpointer,
+        llm_backend=_config.agents.llm_backend,
+        ollama_model=_config.agents.ollama_model,
+        ollama_base_url=_config.agents.ollama_base_url,
+    )
+    try:
         yield
+    finally:
+        if redis_cm is not None:
+            await redis_cm.__aexit__(None, None, None)
 
 
 app = FastAPI(title="Multi-Agent Workspace", version="3.1.0", lifespan=lifespan)
@@ -287,11 +320,59 @@ async def query(request: QueryRequest) -> dict:
     return response.model_dump(mode="json")
 
 
+_UPLOAD_ROOT = Path("data/uploads")
+
+# Windows device names that are reserved regardless of extension (`nul.txt`
+# resolves to the NUL device, not a regular file named "nul.txt") -- checked
+# against the filename stem so an upload can't collide with one.
+_RESERVED_WINDOWS_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def _resolve_safe_upload_path(filename: Optional[str]) -> Path:
+    """Resolve a client-supplied upload filename to a path guaranteed to
+    live inside `_UPLOAD_ROOT`.
+
+    Only `Path(filename).name` (the final path component) is ever used to
+    build the destination path, so directory segments the client sent --
+    `../../etc/passwd`, a bare absolute path, backslash-separated Windows
+    traversal, etc. -- are discarded outright rather than merely pattern
+    matched against `..`. The final path is then re-resolved and checked
+    for containment under `_UPLOAD_ROOT`; this second check is what catches
+    a symlink escape (a same-named entry already sitting in the upload
+    directory that points somewhere else), since stripping to a bare
+    filename can't detect that on its own.
+    """
+
+    if not filename or "\x00" in filename:
+        raise HTTPException(status_code=400, detail="filename is required")
+
+    safe_name = Path(filename).name
+    if not safe_name or safe_name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    if ":" in safe_name:
+        # Rejects Windows alternate-data-stream syntax (`file.txt:hidden.exe`),
+        # which `Path.name` does not strip since ':' isn't a path separator.
+        raise HTTPException(status_code=400, detail="invalid filename")
+    if safe_name.split(".")[0].upper() in _RESERVED_WINDOWS_NAMES:
+        raise HTTPException(status_code=400, detail="invalid filename")
+
+    _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    upload_root = _UPLOAD_ROOT.resolve()
+    dest = (upload_root / safe_name).resolve()
+
+    if dest != upload_root and upload_root not in dest.parents:
+        raise HTTPException(status_code=400, detail="resolved upload path escapes the upload directory")
+
+    return dest
+
+
 @app.post("/ingest")
 def ingest(file: UploadFile) -> dict:
-    upload_dir = Path("data/uploads")
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    dest = upload_dir / file.filename
+    dest = _resolve_safe_upload_path(file.filename)
     dest.write_bytes(file.file.read())
 
     _, chunks = _document_processor.process(dest)
