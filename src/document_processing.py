@@ -20,6 +20,7 @@ from presidio_analyzer import AnalyzerEngine
 from presidio_anonymizer import AnonymizerEngine
 from rich.console import Console
 
+from src.parsers.docx_parser import DocxLoader
 from src.parsers.excel_parser import ExcelLoader
 from src.parsers.ocr_parser import OCRDependencyError, OCRProcessor
 from src.parsers.table_parser import TableExtractor
@@ -31,6 +32,7 @@ TEXT_EXTENSIONS = {".txt", ".md"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
 EXCEL_EXTENSIONS = {".xlsx", ".xls"}
 PDF_EXTENSIONS = {".pdf"}
+DOCX_EXTENSIONS = {".docx"}
 
 SCANNED_PDF_CHAR_THRESHOLD = 100
 
@@ -77,6 +79,7 @@ class DocumentProcessor:
         self.pii_entities = pii_entities or DEFAULT_PII_ENTITIES
 
         self.excel_loader = ExcelLoader()
+        self.docx_loader = DocxLoader()
         self.ocr_processor = OCRProcessor(lang=self.ocr_lang, dpi=self.ocr_dpi)
         self.table_extractor = TableExtractor()
         self._analyzer = AnalyzerEngine()
@@ -128,6 +131,9 @@ class DocumentProcessor:
 
         if suffix in EXCEL_EXTENSIONS:
             documents = self.excel_loader.load(file_path)
+
+        elif suffix in DOCX_EXTENSIONS:
+            documents = self.docx_loader.load(file_path)
 
         elif suffix in IMAGE_EXTENSIONS:
             documents = [self.ocr_processor.process_image(file_path)]

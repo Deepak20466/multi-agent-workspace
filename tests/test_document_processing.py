@@ -65,6 +65,61 @@ def test_load_documents_text_file(processor, tmp_path):
     assert docs[0].text == "hello world"
 
 
+# --- DOCX ingestion -----------------------------------------------------
+#
+# Regression coverage for: `.docx` had a dangling `SourceType.DOCX` enum
+# member and a `python-docx` dependency declared in requirements.txt, but
+# no parser and no dispatch branch in `DocumentProcessor.load()` -- every
+# `.docx` file raised `ValueError: Unsupported file type: .docx`.
+
+
+def test_load_documents_docx_file_with_paragraphs_and_table(processor, tmp_path, make_docx):
+    path = make_docx(
+        tmp_path / "policy.docx",
+        heading="Refund Policy",
+        paragraphs=["Our refund policy allows returns within 30 days of purchase."],
+        table_rows=[["Region", "Days"], ["US", "30"]],
+    )
+
+    docs = processor.load(path)
+
+    assert any(d.source_type == SourceType.DOCX for d in docs)
+    assert any(d.source_type == SourceType.TABLE for d in docs)
+    doc = next(d for d in docs if d.source_type == SourceType.DOCX)
+    assert "Our refund policy allows returns within 30 days of purchase." in doc.text
+
+
+def test_process_docx_file_produces_indexable_chunks(processor, tmp_path, make_docx):
+    """`.docx` Documents must flow through `chunk()`/`process()` exactly
+    like every other source type -- no special-casing needed since
+    DocumentProcessor.chunk() is source-type agnostic.
+    """
+
+    path = make_docx(
+        tmp_path / "policy.docx",
+        paragraphs=["Our refund policy allows returns within 30 days of purchase." * 20],
+    )
+
+    documents, chunks = processor.process(path, chunk_size=200, chunk_overlap=20)
+
+    assert documents
+    assert chunks
+    assert all(c.metadata["source_type"] == "docx" for c in chunks if c.metadata.get("source_type") != "table")
+
+
+def test_load_documents_empty_docx_returns_no_documents(processor, tmp_path, make_docx):
+    path = make_docx(tmp_path / "empty.docx")
+    assert processor.load(path) == []
+
+
+def test_load_documents_malformed_docx_raises_value_error(processor, tmp_path):
+    path = tmp_path / "malformed.docx"
+    path.write_bytes(b"not a real docx file")
+
+    with pytest.raises(ValueError):
+        processor.load(path)
+
+
 def test_is_scanned_pdf_detects_short_text(processor):
     assert processor._is_scanned_pdf("short") is True
     assert processor._is_scanned_pdf("x" * 200) is False

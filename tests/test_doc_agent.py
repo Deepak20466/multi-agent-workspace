@@ -11,6 +11,31 @@ def test_extract_file_refs_finds_supported_extensions():
     assert refs == ["invoice.pdf", "notes.txt"]
 
 
+def test_extract_file_refs_finds_docx():
+    refs = extract_file_refs("Summarize the attached report.docx for me")
+    assert refs == ["report.docx"]
+
+
+def test_answer_from_file_docx_resolves_via_query_and_returns_markdown_table(tmp_path, document_processor, make_docx):
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    target = make_docx(
+        upload_dir / "policy.docx",
+        heading="Refund Policy",
+        paragraphs=["Our refund policy allows returns within 30 days of purchase."],
+    )
+
+    reranker = MagicMock()
+    reranker.rerank.side_effect = lambda query, candidates, top_k: candidates[:top_k]
+
+    agent = DocAgent(document_processor=document_processor, reranker=reranker, upload_dir=upload_dir)
+    response = agent.answer_from_file(None, "What does policy.docx say about refunds?")
+
+    assert response.metadata["file_path"] == str(target)
+    assert response.citations
+    assert response.citations[0].source == str(target)
+
+
 def test_resolve_file_path_prefers_explicit_file_path():
     agent = DocAgent(document_processor=MagicMock())
     assert agent.resolve_file_path("irrelevant query", file_path="explicit.pdf") == "explicit.pdf"

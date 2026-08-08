@@ -4,6 +4,7 @@ from unittest.mock import patch
 import openpyxl
 import pytest
 
+from src.parsers.docx_parser import DocxLoader, _table_to_text as _docx_table_to_text
 from src.parsers.excel_parser import ExcelLoader
 from src.parsers.ocr_parser import OCRDependencyError, OCRProcessor
 from src.parsers.table_parser import TableExtractor
@@ -34,6 +35,113 @@ def test_excel_loader_creates_one_document_per_sheet(tmp_path):
     assert all(d.source_type == SourceType.EXCEL for d in documents)
     assert "Alice" in documents[0].text
     assert documents[0].metadata["sheet_name"] == "Sheet1"
+
+
+# --- DocxLoader ---------------------------------------------------------
+
+
+def test_docx_loader_missing_file_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        DocxLoader().load(tmp_path / "missing.docx")
+
+
+def test_docx_loader_extracts_paragraphs_with_headings_and_metadata(tmp_path, make_docx):
+    path = make_docx(
+        tmp_path / "policy.docx",
+        heading="Refund Policy",
+        heading_level=1,
+        paragraphs=[
+            "Our refund policy allows returns within 30 days of purchase.",
+            "Refunds are processed within 5 business days.",
+        ],
+        title="Refund Policy Doc",
+        author="QA Team",
+    )
+
+    documents = DocxLoader().load(path)
+
+    assert len(documents) == 1
+    document = documents[0]
+    assert document.source_type == SourceType.DOCX
+    assert document.text.startswith("# Refund Policy")
+    assert "Our refund policy allows returns within 30 days of purchase." in document.text
+    assert "Refunds are processed within 5 business days." in document.text
+    assert document.metadata["n_paragraphs"] == 3  # heading + 2 paragraphs
+    assert document.metadata["title"] == "Refund Policy Doc"
+    assert document.metadata["author"] == "QA Team"
+
+
+def test_docx_loader_extracts_tables_as_separate_documents(tmp_path, make_docx):
+    path = make_docx(
+        tmp_path / "with_table.docx",
+        paragraphs=["See the table below for allowed return windows by region."],
+        table_rows=[["Region", "Days"], ["US", "30"], ["EU", "14"]],
+    )
+
+    documents = DocxLoader().load(path)
+
+    paragraph_docs = [d for d in documents if d.source_type == SourceType.DOCX]
+    table_docs = [d for d in documents if d.source_type == SourceType.TABLE]
+
+    assert len(paragraph_docs) == 1
+    assert len(table_docs) == 1
+    assert table_docs[0].metadata["extractor"] == "python-docx"
+    assert "Region: US" in table_docs[0].text
+    assert "Days: 30" in table_docs[0].text
+    assert "Region: EU" in table_docs[0].text
+
+
+def test_docx_loader_empty_docx_returns_no_documents(tmp_path, make_docx):
+    path = make_docx(tmp_path / "empty.docx")
+
+    assert DocxLoader().load(path) == []
+
+
+def test_docx_loader_malformed_docx_raises_value_error(tmp_path):
+    path = tmp_path / "malformed.docx"
+    path.write_bytes(b"this is not a real docx file, just plain text")
+
+    with pytest.raises(ValueError, match="(?i)not a valid docx"):
+        DocxLoader().load(path)
+
+
+def test_docx_loader_empty_file_raises_value_error(tmp_path):
+    """A zero-byte .docx (e.g. an interrupted upload) hits the same
+    PackageNotFoundError-not-a-zip path as other malformed content.
+    """
+
+    path = tmp_path / "zero_bytes.docx"
+    path.write_bytes(b"")
+
+    with pytest.raises(ValueError, match="(?i)not a valid docx"):
+        DocxLoader().load(path)
+
+
+def test_docx_table_to_text_renders_rows():
+    class _FakeCell:
+        def __init__(self, text):
+            self.text = text
+
+    class _FakeRow:
+        def __init__(self, cells):
+            self.cells = [_FakeCell(c) for c in cells]
+
+    class _FakeTable:
+        def __init__(self, rows):
+            self.rows = [_FakeRow(r) for r in rows]
+
+    table = _FakeTable([["name", "age"], ["Alice", "30"], ["Bob", "25"]])
+    text = _docx_table_to_text(table)
+
+    assert "name: Alice" in text
+    assert "name: Bob" in text
+
+
+def test_docx_table_to_text_empty_table_returns_empty_string():
+    class _FakeTable:
+        rows = []
+
+    assert _docx_table_to_text(_FakeTable()) == ""
 
 
 def test_ocr_processor_process_image_missing_file_raises(tmp_path):

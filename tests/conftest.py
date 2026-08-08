@@ -28,6 +28,47 @@ def ollama_available() -> bool:
 
 
 @pytest.fixture
+def make_docx():
+    """Factory writing a real .docx file (via the project's own
+    python-docx dependency, so no hand-rolled fixture format needed the
+    way `make_pdf_bytes` needs one) to `path` with the given paragraphs,
+    heading text, and table rows.
+    """
+
+    def _make(
+        path,
+        paragraphs: list[str] | None = None,
+        heading: str | None = None,
+        heading_level: int = 1,
+        table_rows: list[list[str]] | None = None,
+        title: str | None = None,
+        author: str | None = None,
+    ):
+        from docx import Document as DocxDocument
+
+        docx_document = DocxDocument()
+        if heading is not None:
+            docx_document.add_heading(heading, level=heading_level)
+        for paragraph in paragraphs or []:
+            docx_document.add_paragraph(paragraph)
+        if table_rows:
+            table = docx_document.add_table(rows=0, cols=len(table_rows[0]))
+            for row_values in table_rows:
+                row = table.add_row()
+                for cell, value in zip(row.cells, row_values):
+                    cell.text = value
+        if title:
+            docx_document.core_properties.title = title
+        if author:
+            docx_document.core_properties.author = author
+
+        docx_document.save(str(path))
+        return path
+
+    return _make
+
+
+@pytest.fixture
 def make_pdf_bytes():
     """Factory returning raw bytes for a minimal, valid, single-page PDF
     containing the given text.

@@ -19,6 +19,7 @@ from typing import Optional
 
 from src.document_processing import (
     DocumentProcessor,
+    DOCX_EXTENSIONS,
     EXCEL_EXTENSIONS,
     IMAGE_EXTENSIONS,
     PDF_EXTENSIONS,
@@ -29,7 +30,7 @@ from src.citation import build_citations, format_answer_with_citations
 from src.telemetry import traced_call
 from src.utils.schemas import AgentResponse, RetrievedChunk, RouteName
 
-_SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | IMAGE_EXTENSIONS | EXCEL_EXTENSIONS | PDF_EXTENSIONS
+_SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | IMAGE_EXTENSIONS | EXCEL_EXTENSIONS | PDF_EXTENSIONS | DOCX_EXTENSIONS
 _EXT_PATTERN = "|".join(re.escape(ext.lstrip(".")) for ext in sorted(_SUPPORTED_EXTENSIONS))
 _FILE_REF_RE = re.compile(rf"[\w./\\-]+\.(?:{_EXT_PATTERN})\b", re.IGNORECASE)
 
