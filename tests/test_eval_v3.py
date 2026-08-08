@@ -15,6 +15,14 @@ from eval.seed_sql_db import seed
 from src.agents.doc_agent import DocAgent
 from src.agents.sql_agent import SQLAgent
 
+
+def _patch_chroma(monkeypatch) -> None:
+    import chromadb
+    from chromadb.utils import embedding_functions
+
+    monkeypatch.setattr(chromadb, "PersistentClient", MagicMock())
+    monkeypatch.setattr(embedding_functions, "SentenceTransformerEmbeddingFunction", MagicMock())
+
 # ---------------------------------------------------------------------------
 # sql_row_overlap
 # ---------------------------------------------------------------------------
@@ -168,7 +176,24 @@ def test_generate_sql_testset_falls_back_when_llm_invoke_fails(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_generate_doc_testset_falls_back_per_document_without_llm(document_processor, tmp_path):
+def test_generate_doc_testset_falls_back_per_document_without_llm(document_processor, tmp_path, monkeypatch):
+    """`llm=None` here means "no LLM was passed", not "no LLM is
+    reachable" -- `generate_doc_testset` still tries its own
+    `_default_llm()` internally. Force that to fail explicitly so this
+    test deterministically exercises the fallback path regardless of
+    whether this machine happens to have a local Ollama (or Anthropic
+    credentials) available -- `_default_llm()` now resolves the
+    project's actually-configured backend (Ollama per config.yaml) via
+    `build_llm`, so it would otherwise silently succeed in this dev
+    environment and take the LLM-generation branch instead.
+    """
+
+    import eval.generate_testset as generate_testset_module
+
+    monkeypatch.setattr(
+        generate_testset_module, "_default_llm", MagicMock(side_effect=RuntimeError("no llm configured"))
+    )
+
     sample_dir = tmp_path / "docs"
     sample_dir.mkdir()
     (sample_dir / "note.txt").write_text("The quarterly revenue was $5M in Q3.")
@@ -284,7 +309,23 @@ async def test_run_doc_eval_uses_judge_llm_verdict(document_processor, tmp_path)
     judge.ainvoke.assert_awaited_once()
 
 
-async def test_run_doc_eval_falls_back_to_substring_match_without_judge(document_processor, tmp_path):
+async def test_run_doc_eval_falls_back_to_substring_match_without_judge(document_processor, tmp_path, monkeypatch):
+    """`judge_llm=None` means "no judge was passed", not "no judge is
+    reachable" -- `run_doc_eval` still tries its own `_default_llm()`
+    internally. Force that to fail explicitly so this test
+    deterministically exercises the substring-fallback path rather than
+    (as it would silently do in this dev environment, where
+    `_default_llm()` now resolves the project's configured Ollama
+    backend via `build_llm`) actually invoking a real LLM judge and
+    passing for the wrong reason.
+    """
+
+    import eval.run_ragas_eval as run_ragas_eval_module
+
+    monkeypatch.setattr(
+        run_ragas_eval_module, "_default_llm", MagicMock(side_effect=RuntimeError("no llm configured"))
+    )
+
     sample_file = tmp_path / "policy.txt"
     sample_file.write_text("Refunds are issued within 30 days of purchase.")
 
@@ -307,3 +348,71 @@ async def test_run_doc_eval_skips_on_empty_testset(tmp_path):
 
     result = await run_doc_eval(str(testset_path))
     assert result["status"].startswith("skipped")
+
+
+# ---------------------------------------------------------------------------
+# RAG eval: RAGAgent + RAGAS wired to the project's configured (local
+# Ollama by default) backend instead of silently requiring OPENAI_API_KEY
+# ---------------------------------------------------------------------------
+
+
+def test_build_rag_agent_wires_configured_backend(monkeypatch):
+    """`_build_rag_agent()` previously constructed `RAGAgent(retriever=
+    retriever)` with no backend at all, leaving `self.llm = None` --
+    every "evaluated" answer would have been the raw-context stub
+    template, not a genuine generation, making any RAGAS score
+    meaningless. It must now build a real LLM from config.yaml's
+    `agents.llm_backend` (Ollama by default in this project).
+    """
+
+    from eval.run_ragas_eval import _build_rag_agent
+    from src.config import load_config
+
+    _patch_chroma(monkeypatch)
+    config = load_config()
+
+    agent = _build_rag_agent()
+
+    assert agent.llm is not None
+    if config.agents.llm_backend == "ollama":
+        assert agent.llm.model == config.agents.ollama_model
+
+
+def test_ragas_judge_llm_and_embeddings_wraps_configured_backend(ollama_available):
+    """RAGAS's `evaluate()` silently defaults to an OpenAI-backed judge/
+    embeddings model when `llm`/`embeddings` aren't passed explicitly --
+    this is what made RAGAS eval require OPENAI_API_KEY even though the
+    project is configured to run fully locally with Ollama. Skipped (not
+    failed) when Ollama isn't reachable, mirroring the other real-Ollama
+    integration tests in this suite.
+    """
+
+    if not ollama_available:
+        pytest.skip("Ollama not reachable at localhost:11434")
+
+    from eval.run_ragas_eval import _ragas_judge_llm_and_embeddings
+
+    judge_llm, judge_embeddings = _ragas_judge_llm_and_embeddings()
+
+    assert judge_llm is not None
+    assert judge_embeddings is not None
+    assert type(judge_llm).__name__ == "LangchainLLMWrapper"
+    assert type(judge_embeddings).__name__ == "LangchainEmbeddingsWrapper"
+
+
+def test_ragas_judge_llm_and_embeddings_degrades_to_none_on_failure(monkeypatch):
+    """A broken local setup (e.g. the embedding model can't be loaded)
+    must degrade to ragas's own defaults instead of blocking the whole
+    eval run -- `evaluate()` accepts `llm=None`/`embeddings=None`.
+    """
+
+    import eval.run_ragas_eval as run_ragas_eval_module
+
+    monkeypatch.setattr(
+        run_ragas_eval_module, "_default_llm", MagicMock(side_effect=RuntimeError("backend unavailable"))
+    )
+
+    judge_llm, judge_embeddings = run_ragas_eval_module._ragas_judge_llm_and_embeddings()
+
+    assert judge_llm is None
+    assert judge_embeddings is None

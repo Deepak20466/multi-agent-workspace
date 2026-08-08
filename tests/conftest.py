@@ -197,16 +197,22 @@ def app_module():
     # `import main` just ran `load_dotenv()`, which -- unlike
     # monkeypatch.setenv -- writes straight into os.environ with nothing
     # to undo it later. If a developer's local .env configures a
-    # non-default LLM_BACKEND/OLLAMA_MODEL/OLLAMA_BASE_URL (e.g. for
-    # local Ollama use), that leaks into every test for the rest of this
-    # session once this session-scoped fixture is first created,
-    # regardless of what the shell environment looked like beforehand.
-    # Strip them back out so build_llm()'s default ("anthropic" unless
-    # a caller explicitly configures otherwise) is what tests actually
-    # observe -- matching a machine with no .env overrides at all.
+    # non-default LLM_BACKEND/OLLAMA_MODEL/OLLAMA_BASE_URL/REDIS_URL (e.g.
+    # for local Ollama/Redis use), that leaks into every test for the
+    # rest of this session once this session-scoped fixture is first
+    # created, regardless of what the shell environment looked like
+    # beforehand -- e.g. a REDIS_URL leaking back in this way once broke
+    # RateLimiter(redis_url=None)'s "no Redis configured" test, since its
+    # own `os.getenv("REDIS_URL")` fallback picked up the leaked value
+    # from a completely unrelated, earlier test file. Strip them back out
+    # so build_llm()'s default ("anthropic" unless a caller explicitly
+    # configures otherwise) and "Redis unconfigured" are what tests
+    # actually observe -- matching a machine with no .env overrides at
+    # all.
     mp.delenv("LLM_BACKEND", raising=False)
     mp.delenv("OLLAMA_MODEL", raising=False)
     mp.delenv("OLLAMA_BASE_URL", raising=False)
+    mp.delenv("REDIS_URL", raising=False)
 
     yield main
 

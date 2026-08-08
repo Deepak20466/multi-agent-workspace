@@ -71,3 +71,21 @@ def verify_citation_markers(answer: str, n_citations: int) -> bool:
 
     markers = {int(m) for m in re.findall(r"\[(\d+)\]", answer)}
     return all(1 <= m <= n_citations for m in markers)
+
+
+def strip_invalid_citation_markers(answer: str, n_citations: int) -> str:
+    """Remove any `[n]` marker that doesn't correspond to a real citation
+    (n outside `1..n_citations`) instead of letting a hallucinated
+    reference number render in the final answer as if it pointed to a
+    real source. Markers within range are left untouched.
+
+    Called after `verify_citation_markers` reports a failure -- this is
+    the actual enforcement, not just detection: an LLM answer must never
+    silently carry a citation number nothing in the source list backs.
+    """
+
+    def _replace(match: "re.Match[str]") -> str:
+        n = int(match.group(1))
+        return match.group(0) if 1 <= n <= n_citations else ""
+
+    return re.sub(r"\[(\d+)\]", _replace, answer)

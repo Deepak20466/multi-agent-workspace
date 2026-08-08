@@ -72,9 +72,26 @@ def _parse_json_array(raw_text: str) -> list[dict]:
 
 
 def _default_llm():
-    from langchain_anthropic import ChatAnthropic
+    """The project's own configured chat backend -- Ollama by default per
+    config.yaml (`agents.llm_backend`), or Anthropic if explicitly
+    configured -- via the same `src.llm_factory.build_llm` every agent
+    uses. Previously hardcoded to `ChatAnthropic`, which meant testset
+    generation silently fell back to blank ground_truth / deterministic
+    fallback content whenever ANTHROPIC_API_KEY wasn't set, even on a
+    machine set up to run fully offline with Ollama.
+    """
 
-    return ChatAnthropic(model=TESTSET_MODEL, temperature=0)
+    from src.config import load_config
+    from src.llm_factory import build_llm
+
+    config = load_config()
+    return build_llm(
+        TESTSET_MODEL,
+        backend=config.agents.llm_backend,
+        ollama_model=config.agents.ollama_model,
+        ollama_base_url=config.agents.ollama_base_url,
+        temperature=0,
+    )
 
 
 def generate_testset(

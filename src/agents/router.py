@@ -24,6 +24,7 @@ from typing import Dict, List, Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from loguru import logger
 
 from src.agents.doc_agent import DocAgent
 from src.agents.rag_agent import RAGAgent
@@ -330,20 +331,33 @@ async def _get_default_graph() -> AgentGraph:
 
     async with _default_graph_lock:
         if _default_graph is None:
-            from langgraph.checkpoint.redis.aio import AsyncRedisSaver
-
             from src.document_processing import DocumentProcessor
             from src.hybrid_retrieval import HybridRetriever
             from src.vectorstore import VectorStore
 
+            # Mirrors main.py's lifespan handler: Redis checkpointing is
+            # best-effort, not required. REDIS_URL unset, unreachable, or
+            # any other setup failure used to raise straight out of this
+            # function (a bare `raise RuntimeError(...)` with no fallback
+            # at all) and take down every caller of `astream_events`/
+            # `_get_default_graph` over what should be a degraded-mode
+            # cache-tier outage, not a hard failure -- AgentGraph already
+            # falls back to an in-memory MemorySaver when checkpointer is
+            # None, so there's always a working (if non-durable) path.
+            checkpointer = None
             redis_url = os.getenv("REDIS_URL")
-            if not redis_url:
-                raise RuntimeError("REDIS_URL is not set; required for RedisSaver checkpointing")
+            if redis_url:
+                try:
+                    from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
-            # Entered once and kept open for the lifetime of the process —
-            # this module-level singleton has no shutdown hook of its own.
-            checkpointer = await AsyncRedisSaver.from_conn_string(redis_url).__aenter__()
-            await checkpointer.asetup()
+                    # Entered once and kept open for the lifetime of the
+                    # process -- this module-level singleton has no
+                    # shutdown hook of its own.
+                    checkpointer = await AsyncRedisSaver.from_conn_string(redis_url).__aenter__()
+                    await checkpointer.asetup()
+                except Exception as exc:
+                    logger.warning("Redis checkpointer unavailable ({}); using in-memory session state.", exc)
+                    checkpointer = None
 
             vector_store = VectorStore()
             retriever = HybridRetriever(vector_store)

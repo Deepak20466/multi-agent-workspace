@@ -1,0 +1,53 @@
+[
+  {
+    "question": "What is the main topic of this document?",
+    "contexts": [
+      "Refund Policy\n\nOur refund policy allows returns within 30 days of purchase for a full refund.\nItems must be unused and in their original packaging. Refunds are processed\nwithin 5 business days of receiving the returned item, and are issued to the\noriginal payment method.\n\nDigital products and gift cards are non-refundable. Shipping costs are\nnon-refundable unless the return is due to a defect or shipping error on our\npart. Contact <EMAIL_ADDRESS> to initiate a return."
+    ],
+    "ground_truth": "This document provides information about the refund policy for products and services, including items that can be returned within 30 days of purchase, the process for returning items, and the non-refundable nature of digital products and gift cards.",
+    "source_file": "data\\sample_documents\\refund_policy.txt"
+  },
+  {
+    "question": "Summarize the key figures mentioned in the document.",
+    "contexts": [
+      "Refund Policy\n\nOur refund policy allows returns within 30 days of purchase for a full refund.\nItems must be unused and in their original packaging. Refunds are processed\nwithin 5 business days of receiving the returned item, and are issued to the\noriginal payment method.\n\nDigital products and gift cards are non-refundable. Shipping costs are\nnon-refundable unless the return is due to a defect or shipping error on our\npart. Contact <EMAIL_ADDRESS> to initiate a return."
+    ],
+    "ground_truth": "The key figures mentioned in the refund policy of Alibaba Cloud include:\n- The maximum duration for returns within 30 days is 5 business days.\n- Items must be unused and in their original packaging.\n- Refunds are processed within 5 business days after receiving the returned item.\n- Digital products and gift cards are non-refundable, with shipping costs being non-refundable unless due to a defect or shipping error on our part.",
+    "source_file": "data\\sample_documents\\refund_policy.txt"
+  },
+  {
+    "question": "What conclusions does the document draw?",
+    "contexts": [
+      "Refund Policy\n\nOur refund policy allows returns within 30 days of purchase for a full refund.\nItems must be unused and in their original packaging. Refunds are processed\nwithin 5 business days of receiving the returned item, and are issued to the\noriginal payment method.\n\nDigital products and gift cards are non-refundable. Shipping costs are\nnon-refundable unless the return is due to a defect or shipping error on our\npart. Contact <EMAIL_ADDRESS> to initiate a return."
+    ],
+    "ground_truth": "The document draws a refund policy for all items purchased within 30 days of purchase, allowing returns with unused and in their original packaging. It also mentions that digital products and gift cards are non-refundable unless due to defects or shipping errors on one's part. Additionally, it provides contact information for returning items.",
+    "source_file": "data\\sample_documents\\refund_policy.txt"
+  },
+  {
+    "question": "What is the main topic of this document?",
+    "contexts": [
+      "Quarterly Sales Summary\n\nQ1 2026: Total revenue was $1.24M across 3,150 orders, an increase of 8% over Q4 2025. The North America region led with $620K in revenue, followed by Europe at $410K and Asia-Pacific at $210K. The best-selling product category was Electronics, accounting for 42% of total revenue.\n\nQ2 2026: Total revenue grew to $1.38M across 3,410 orders, an 11% increase quarter-over-quarter. North America remained the top region at $690K, Europe grew to $460K, and Asia-Pacific reached $230K. Electronics again led product categories at 39% of revenue, with Home Goods rising to 25%.\n\nQ3 2026: Total revenue reached $1.51M across 3,720 orders, a 9.4% increase over Q2. North America contributed $740K, Europe $505K, and Asia-Pacific $265K. Home Goods overtook Electronics as the top category at 33% of revenue, with Electronics close behind at 31%.\n\nQ4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand, driven primarily by continue",
+      "hind at 31%.\n\nQ4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand, driven primarily by continued growth in the Home Goods and Electronics categories across all regions.\n\nYear-to-date (Q1-Q3 2026) totals: $4.13M in revenue across 10,280 orders, with an average order value of approximately $402."
+    ],
+    "ground_truth": "The main topic of this document is quarterly sales summary for Q1-Q3 2026, focusing on total revenue and product categories across North America, Europe, Asia-Pacific, and Electronics.",
+    "source_file": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "Summarize the key figures mentioned in the document.",
+    "contexts": [
+      "Quarterly Sales Summary\n\nQ1 2026: Total revenue was $1.24M across 3,150 orders, an increase of 8% over Q4 2025. The North America region led with $620K in revenue, followed by Europe at $410K and Asia-Pacific at $210K. The best-selling product category was Electronics, accounting for 42% of total revenue.\n\nQ2 2026: Total revenue grew to $1.38M across 3,410 orders, an 11% increase quarter-over-quarter. North America remained the top region at $690K, Europe grew to $460K, and Asia-Pacific reached $230K. Electronics again led product categories at 39% of revenue, with Home Goods rising to 25%.\n\nQ3 2026: Total revenue reached $1.51M across 3,720 orders, a 9.4% increase over Q2. North America contributed $740K, Europe $505K, and Asia-Pacific $265K. Home Goods overtook Electronics as the top category at 33% of revenue, with Electronics close behind at 31%.\n\nQ4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand, driven primarily by continue",
+      "hind at 31%.\n\nQ4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand, driven primarily by continued growth in the Home Goods and Electronics categories across all regions.\n\nYear-to-date (Q1-Q3 2026) totals: $4.13M in revenue across 10,280 orders, with an average order value of approximately $402."
+    ],
+    "ground_truth": "The Q4 2026 sales summary shows that total revenue for the quarter was $1.51M, which is a 9.4% increase from the previous quarter. The North America region led with $740K in revenue, followed by Europe at $505K and Asia-Pacific at $265K. Electronics accounted for 39% of total revenue, with Home Goods rising to 25%.",
+    "source_file": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "What conclusions does the document draw?",
+    "contexts": [
+      "Quarterly Sales Summary\n\nQ1 2026: Total revenue was $1.24M across 3,150 orders, an increase of 8% over Q4 2025. The North America region led with $620K in revenue, followed by Europe at $410K and Asia-Pacific at $210K. The best-selling product category was Electronics, accounting for 42% of total revenue.\n\nQ2 2026: Total revenue grew to $1.38M across 3,410 orders, an 11% increase quarter-over-quarter. North America remained the top region at $690K, Europe grew to $460K, and Asia-Pacific reached $230K. Electronics again led product categories at 39% of revenue, with Home Goods rising to 25%.\n\nQ3 2026: Total revenue reached $1.51M across 3,720 orders, a 9.4% increase over Q2. North America contributed $740K, Europe $505K, and Asia-Pacific $265K. Home Goods overtook Electronics as the top category at 33% of revenue, with Electronics close behind at 31%.\n\nQ4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand, driven primarily by continue",
+      "hind at 31%.\n\nQ4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand, driven primarily by continued growth in the Home Goods and Electronics categories across all regions.\n\nYear-to-date (Q1-Q3 2026) totals: $4.13M in revenue across 10,280 orders, with an average order value of approximately $402."
+    ],
+    "ground_truth": "The document draws several key conclusions based on the quarterly sales data provided:\n\n1. **Revenue Growth**: The Q1-3 2026 quarter saw a significant increase in revenue from $1,240,000 to $1,510,000, an 8% increase over Q4 2025.\n\n2. **Product Categories and Revenue Distribution**:\n   - Electronics accounted for the highest percentage of total revenue (42%), followed by Home Goods at 39%, and Electronics again at 31%.\n\n3. **Seasonal Trends**: The data shows a consistent trend in the Q1-3 2026 quarter, with overall revenue growth across all regions.\n\n4. **Forecasted Revenue**: The document projects that the total revenue for the year (Q4 2026) will reach $1,650,000 based on current order trends and seasonal demand.\n\n5. **Seasonal Variability**: While Q3 2026 saw a slight increase in revenue compared to Q2 2026, the overall trend remains positive with an average of approximately $402 per order.\n\nThese conclusions provide insights into the performance of the company across different quarters and regions, as well as their ability to maintain consistent growth despite seasonal fluctuations.",
+    "source_file": "data\\sample_documents\\sales_summary.txt"
+  }
+]

@@ -1,4 +1,9 @@
-from src.citation import build_citations, format_answer_with_citations, verify_citation_markers
+from src.citation import (
+    build_citations,
+    format_answer_with_citations,
+    strip_invalid_citation_markers,
+    verify_citation_markers,
+)
 from src.utils.schemas import Chunk, RetrievedChunk
 
 
@@ -35,3 +40,20 @@ def test_verify_citation_markers_detects_out_of_range_marker():
 
 def test_verify_citation_markers_no_markers_is_valid():
     assert verify_citation_markers("no citations here", n_citations=0) is True
+
+
+def test_strip_invalid_citation_markers_removes_out_of_range_marker():
+    result = strip_invalid_citation_markers("see [1] and [5]", n_citations=2)
+    assert result == "see [1] and "
+    assert verify_citation_markers(result, n_citations=2)
+
+
+def test_strip_invalid_citation_markers_leaves_valid_markers_untouched():
+    text = "Refunds are allowed within 30 days [1] and processed in 5 days [2]."
+    assert strip_invalid_citation_markers(text, n_citations=2) == text
+
+
+def test_strip_invalid_citation_markers_no_citations_removes_all_markers():
+    result = strip_invalid_citation_markers("per [1] and [2]", n_citations=0)
+    assert result == "per  and "
+    assert verify_citation_markers(result, n_citations=0)

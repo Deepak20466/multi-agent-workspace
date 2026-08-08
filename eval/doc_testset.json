@@ -1,0 +1,111 @@
+[
+  {
+    "question": "What are the conditions for returns?",
+    "expected_contains": [
+      "refund_policy"
+    ],
+    "file_path": "data\\sample_documents\\refund_policy.txt"
+  },
+  {
+    "question": "How long can items be returned within?",
+    "expected_contains": [
+      "30 days"
+    ],
+    "file_path": "data\\sample_documents\\refund_policy.txt"
+  },
+  {
+    "question": "Are digital products and gift cards non-refundable?",
+    "expected_contains": [
+      "non-refundable"
+    ],
+    "file_path": "data\\sample_documents\\refund_policy.txt"
+  },
+  {
+    "question": "What was the total revenue for Q1 2026?",
+    "expected_contains": [
+      "Q1 2026: Total revenue was $1.24M across 3,150 orders",
+      "Q1 2026: Total revenue was $1.24M across 3,150 orders"
+    ],
+    "file_path": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "What was the total revenue for Q2 2026?",
+    "expected_contains": [
+      "Q2 2026: Total revenue grew to $1.38M across 3,410 orders",
+      "Q2 2026: Total revenue grew to $1.38M across 3,410 orders"
+    ],
+    "file_path": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "What was the total revenue for Q3 2026?",
+    "expected_contains": [
+      "Q3 2026: Total revenue reached $1.51M across 3,720 orders",
+      "Q3 2026: Total revenue reached $1.51M across 3,720 orders"
+    ],
+    "file_path": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "What was the total revenue for Q4 2026?",
+    "expected_contains": [
+      "Q4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand",
+      "Q4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand"
+    ],
+    "file_path": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "What was the total revenue for Q4 2026 (forecast)?",
+    "expected_contains": [
+      "Q4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand",
+      "Q4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand"
+    ],
+    "file_path": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "What was the total revenue for Q1-Q3 2026?",
+    "expected_contains": [
+      "Q1 2026: Total revenue was $1.24M across 3,150 orders",
+      "Q1 2026: Total revenue was $1.24M across 3,150 orders"
+    ],
+    "file_path": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "What was the total revenue for Q1-Q3 2026?",
+    "expected_contains": [
+      "Q1 2026: Total revenue was $1.24M across 3,150 orders",
+      "Q1 2026: Total revenue was $1.24M across 3,150 orders"
+    ],
+    "file_path": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "What was the total revenue for Q2 2026?",
+    "expected_contains": [
+      "Q2 2026: Total revenue grew to $1.38M across 3,410 orders",
+      "Q2 2026: Total revenue grew to $1.38M across 3,410 orders"
+    ],
+    "file_path": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "What was the total revenue for Q3 2026?",
+    "expected_contains": [
+      "Q3 2026: Total revenue reached $1.51M across 3,720 orders",
+      "Q3 2026: Total revenue reached $1.51M across 3,720 orders"
+    ],
+    "file_path": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "What was the total revenue for Q4 2026?",
+    "expected_contains": [
+      "Q4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand",
+      "Q4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand"
+    ],
+    "file_path": "data\\sample_documents\\sales_summary.txt"
+  },
+  {
+    "question": "What was the total revenue for Q4 2026 (forecast)?",
+    "expected_contains": [
+      "Q4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand",
+      "Q4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand"
+    ],
+    "file_path": "data\\sample_documents\\sales_summary.txt"
+  }
+]

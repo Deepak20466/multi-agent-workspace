@@ -1,0 +1,30 @@
+[
+  {
+    "question": "\u67e5\u8be2\u6bcf\u4e2a\u5730\u533a\u7684\u9500\u552e\u8bb0\u5f55\uff0c\u5305\u62ec\u4ea7\u54c1\u7684\u540d\u79f0\u548c\u6570\u91cf\u3002",
+    "ground_truth_sql": "SELECT region, product FROM sales GROUP BY region"
+  },
+  {
+    "question": "\u627e\u51fa\u9500\u552e\u65e5\u671f\u57282023\u5e741\u6708\u7684\u8bb0\u5f55\u3002",
+    "ground_truth_sql": "SELECT sale_date FROM sales WHERE YEAR(sale_date) = 2023 AND MONTH(sale_date) = 1"
+  },
+  {
+    "question": "\u8ba1\u7b97\u6bcf\u4e2a\u4ea7\u54c1\u7684\u5e73\u5747\u9500\u552e\u989d\u3002",
+    "ground_truth_sql": "SELECT product, AVG(amount) FROM sales GROUP BY product"
+  },
+  {
+    "question": "\u627e\u51fa\u9500\u552e\u65e5\u671f\u57282023\u5e746\u6708\u7684\u8bb0\u5f55\u3002",
+    "ground_truth_sql": "SELECT sale_date FROM sales WHERE YEAR(sale_date) = 2023 AND MONTH(sale_date) = 6"
+  },
+  {
+    "question": "\u786e\u5b9a\u6bcf\u4e2a\u4ea7\u54c1\u7684\u6700\u5927\u9500\u552e\u989d\u3002",
+    "ground_truth_sql": "SELECT product, MAX(amount) FROM sales GROUP BY product"
+  },
+  {
+    "question": "\u627e\u51fa\u9500\u552e\u65e5\u671f\u57281\u6708\u548c5\u6708\u7684\u8bb0\u5f55\u3002",
+    "ground_truth_sql": "SELECT sale_date FROM sales WHERE MONTH(sale_date) IN (1, 5)"
+  },
+  {
+    "question": "\u8ba1\u7b97\u6bcf\u4e2a\u4ea7\u54c1\u7684\u603b\u9500\u552e\u989d\u3002",
+    "ground_truth_sql": "SELECT product, SUM(amount) FROM sales GROUP BY product"
+  }
+]

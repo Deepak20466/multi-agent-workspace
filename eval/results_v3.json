@@ -1,0 +1,199 @@
+{
+  "rag": {
+    "faithfulness": 0.75,
+    "answer_relevancy": 0.22967653388807482,
+    "context_precision": 0.999999999925,
+    "context_recall": 1.0
+  },
+  "sql": {
+    "accuracy": 0.42857142857142855,
+    "correct": 3,
+    "n": 7,
+    "details": [
+      {
+        "question": "\u67e5\u8be2\u6bcf\u4e2a\u5730\u533a\u7684\u9500\u552e\u8bb0\u5f55\uff0c\u5305\u62ec\u4ea7\u54c1\u7684\u540d\u79f0\u548c\u6570\u91cf\u3002",
+        "generated_sql": "SELECT region, product FROM sales LIMIT 1000",
+        "ground_truth_sql": "SELECT region, product FROM sales GROUP BY region",
+        "overlap": 0.6666666666666666,
+        "correct": false
+      },
+      {
+        "question": "\u627e\u51fa\u9500\u552e\u65e5\u671f\u57282023\u5e741\u6708\u7684\u8bb0\u5f55\u3002",
+        "ground_truth_sql": "SELECT sale_date FROM sales WHERE YEAR(sale_date) = 2023 AND MONTH(sale_date) = 1",
+        "error": "(sqlite3.OperationalError) near \"FROM\": syntax error\n[SQL: SELECT sale_date FROM sales WHERE EXTRACT(YEAR FROM sale_date) = 2023 AND EXTRACT(MONTH FROM sale_date) = 1 LIMIT 1000]\n(Background on this error at: https://sqlalche.me/e/20/e3q8)"
+      },
+      {
+        "question": "\u8ba1\u7b97\u6bcf\u4e2a\u4ea7\u54c1\u7684\u5e73\u5747\u9500\u552e\u989d\u3002",
+        "generated_sql": "SELECT product, AVG(amount) AS average_sales FROM sales GROUP BY product LIMIT 1000",
+        "ground_truth_sql": "SELECT product, AVG(amount) FROM sales GROUP BY product",
+        "overlap": 1.0,
+        "correct": true
+      },
+      {
+        "question": "\u627e\u51fa\u9500\u552e\u65e5\u671f\u57282023\u5e746\u6708\u7684\u8bb0\u5f55\u3002",
+        "ground_truth_sql": "SELECT sale_date FROM sales WHERE YEAR(sale_date) = 2023 AND MONTH(sale_date) = 6",
+        "error": "(sqlite3.OperationalError) near \"FROM\": syntax error\n[SQL: SELECT sale_date FROM sales WHERE EXTRACT(YEAR FROM sale_date) = 2023 AND EXTRACT(MONTH FROM sale_date) = 6 LIMIT 1000]\n(Background on this error at: https://sqlalche.me/e/20/e3q8)"
+      },
+      {
+        "question": "\u786e\u5b9a\u6bcf\u4e2a\u4ea7\u54c1\u7684\u6700\u5927\u9500\u552e\u989d\u3002",
+        "generated_sql": "SELECT product, MAX(amount) AS max_sales FROM sales GROUP BY product LIMIT 1000",
+        "ground_truth_sql": "SELECT product, MAX(amount) FROM sales GROUP BY product",
+        "overlap": 1.0,
+        "correct": true
+      },
+      {
+        "question": "\u627e\u51fa\u9500\u552e\u65e5\u671f\u57281\u6708\u548c5\u6708\u7684\u8bb0\u5f55\u3002",
+        "ground_truth_sql": "SELECT sale_date FROM sales WHERE MONTH(sale_date) IN (1, 5)",
+        "error": "(sqlite3.OperationalError) near \"FROM\": syntax error\n[SQL: SELECT sale_date FROM sales WHERE EXTRACT(MONTH FROM sale_date) IN (1, 5) LIMIT 1000]\n(Background on this error at: https://sqlalche.me/e/20/e3q8)"
+      },
+      {
+        "question": "\u8ba1\u7b97\u6bcf\u4e2a\u4ea7\u54c1\u7684\u603b\u9500\u552e\u989d\u3002",
+        "generated_sql": "SELECT product, SUM(amount) AS total_sales FROM sales GROUP BY product LIMIT 1000",
+        "ground_truth_sql": "SELECT product, SUM(amount) FROM sales GROUP BY product",
+        "overlap": 1.0,
+        "correct": true
+      }
+    ]
+  },
+  "doc": {
+    "accuracy": 1.0,
+    "correct": 14,
+    "n": 14,
+    "details": [
+      {
+        "question": "What are the conditions for returns?",
+        "file_path": "data\\sample_documents\\refund_policy.txt",
+        "correct": true
+      },
+      {
+        "question": "How long can items be returned within?",
+        "file_path": "data\\sample_documents\\refund_policy.txt",
+        "correct": true
+      },
+      {
+        "question": "Are digital products and gift cards non-refundable?",
+        "file_path": "data\\sample_documents\\refund_policy.txt",
+        "correct": true
+      },
+      {
+        "question": "What was the total revenue for Q1 2026?",
+        "file_path": "data\\sample_documents\\sales_summary.txt",
+        "correct": true
+      },
+      {
+        "question": "What was the total revenue for Q2 2026?",
+        "file_path": "data\\sample_documents\\sales_summary.txt",
+        "correct": true
+      },
+      {
+        "question": "What was the total revenue for Q3 2026?",
+        "file_path": "data\\sample_documents\\sales_summary.txt",
+        "correct": true
+      },
+      {
+        "question": "What was the total revenue for Q4 2026?",
+        "file_path": "data\\sample_documents\\sales_summary.txt",
+        "correct": true
+      },
+      {
+        "question": "What was the total revenue for Q4 2026 (forecast)?",
+        "file_path": "data\\sample_documents\\sales_summary.txt",
+        "correct": true
+      },
+      {
+        "question": "What was the total revenue for Q1-Q3 2026?",
+        "file_path": "data\\sample_documents\\sales_summary.txt",
+        "correct": true
+      },
+      {
+        "question": "What was the total revenue for Q1-Q3 2026?",
+        "file_path": "data\\sample_documents\\sales_summary.txt",
+        "correct": true
+      },
+      {
+        "question": "What was the total revenue for Q2 2026?",
+        "file_path": "data\\sample_documents\\sales_summary.txt",
+        "correct": true
+      },
+      {
+        "question": "What was the total revenue for Q3 2026?",
+        "file_path": "data\\sample_documents\\sales_summary.txt",
+        "correct": true
+      },
+      {
+        "question": "What was the total revenue for Q4 2026?",
+        "file_path": "data\\sample_documents\\sales_summary.txt",
+        "correct": true
+      },
+      {
+        "question": "What was the total revenue for Q4 2026 (forecast)?",
+        "file_path": "data\\sample_documents\\sales_summary.txt",
+        "correct": true
+      }
+    ]
+  },
+  "retrieval": {
+    "status": "skipped: no rows in eval/testset.json carry relevant_chunk_ids"
+  },
+  "sql_guardrail": {
+    "pass_rate": 1.0,
+    "correct": 9,
+    "n": 9,
+    "details": [
+      {
+        "sql": "SELECT * FROM sales",
+        "expected_safe": true,
+        "actual_safe": true,
+        "correct": true
+      },
+      {
+        "sql": "SELECT region, SUM(amount) FROM sales GROUP BY region",
+        "expected_safe": true,
+        "actual_safe": true,
+        "correct": true
+      },
+      {
+        "sql": "SELECT * FROM sales WHERE region = 'East' ORDER BY amount DESC LIMIT 10",
+        "expected_safe": true,
+        "actual_safe": true,
+        "correct": true
+      },
+      {
+        "sql": "DROP TABLE sales",
+        "expected_safe": false,
+        "actual_safe": false,
+        "correct": true
+      },
+      {
+        "sql": "DELETE FROM sales WHERE id = 1",
+        "expected_safe": false,
+        "actual_safe": false,
+        "correct": true
+      },
+      {
+        "sql": "UPDATE sales SET amount = 0",
+        "expected_safe": false,
+        "actual_safe": false,
+        "correct": true
+      },
+      {
+        "sql": "INSERT INTO sales (id, region) VALUES (99, 'X')",
+        "expected_safe": false,
+        "actual_safe": false,
+        "correct": true
+      },
+      {
+        "sql": "SELECT * FROM sales; DROP TABLE sales;",
+        "expected_safe": false,
+        "actual_safe": false,
+        "correct": true
+      },
+      {
+        "sql": "WITH deleted AS (DELETE FROM sales RETURNING *) SELECT * FROM deleted",
+        "expected_safe": false,
+        "actual_safe": false,
+        "correct": true
+      }
+    ]
+  }
+}

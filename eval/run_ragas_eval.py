@@ -30,6 +30,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("run_ragas_eval")
 
 JUDGE_MODEL = os.getenv("EVAL_JUDGE_MODEL", "claude-haiku-4-5")
+EVAL_EMBEDDING_MODEL = os.getenv("EVAL_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
 
 def _extract_text(response: object) -> str:
@@ -38,26 +39,81 @@ def _extract_text(response: object) -> str:
 
 
 def _default_llm():
-    from langchain_anthropic import ChatAnthropic
+    """The project's own configured chat backend -- Ollama by default
+    per config.yaml (`agents.llm_backend`), or Anthropic if explicitly
+    configured -- via the same `src.llm_factory.build_llm` every agent
+    uses. Previously hardcoded to `ChatAnthropic`, which made every eval
+    step (RAG generation, doc-eval judging, testset ground_truth) require
+    ANTHROPIC_API_KEY even on a machine set up to run fully offline with
+    Ollama.
+    """
 
-    return ChatAnthropic(model=JUDGE_MODEL, temperature=0)
+    from src.config import load_config
+    from src.llm_factory import build_llm
+
+    config = load_config()
+    return build_llm(
+        JUDGE_MODEL,
+        backend=config.agents.llm_backend,
+        ollama_model=config.agents.ollama_model,
+        ollama_base_url=config.agents.ollama_base_url,
+        temperature=0,
+    )
 
 
-def _import_ragas():
-    """Import ragas, working around a real (as of ragas 0.4.3 +
-    langchain-community 0.4.x) upstream break: ragas.llms.base
-    unconditionally imports `langchain_community.chat_models.vertexai
-    .ChatVertexAI`, which langchain-community dropped in its 0.4 line
-    (VertexAI moved to the standalone `langchain-google-vertexai`
-    package). We never use VertexAI, so a stub class satisfies the
-    import -- the isinstance checks ragas does against it simply never
-    match, which is exactly what we want.
+def _ragas_judge_llm_and_embeddings():
+    """Wrap the project's configured chat backend + a local
+    sentence-transformers embedding model (the same `all-MiniLM-L6-v2`
+    model `VectorStore` already uses) as RAGAS's LLM/embeddings judges.
+
+    `ragas.evaluate()` silently defaults to an OpenAI-backed judge and
+    embeddings model when `llm`/`embeddings` aren't passed explicitly --
+    the actual reason RAGAS eval required OPENAI_API_KEY even when this
+    project is configured end-to-end for local Ollama. Returns
+    `(None, None)` (letting `evaluate()` fall back to its own defaults)
+    if wrapping fails for any reason, so a misconfigured local setup
+    degrades instead of blocking the whole eval run.
+    """
+
+    try:
+        # `ragas.embeddings`/`ragas.llms` transitively hit the same
+        # vertexai import break `_import_ragas()` works around -- this
+        # function must be safe to call on its own, not just after
+        # `_import_ragas()` has already happened to run first.
+        _ensure_ragas_importable()
+
+        from ragas.embeddings import LangchainEmbeddingsWrapper
+        from ragas.llms import LangchainLLMWrapper
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+
+        judge_llm = LangchainLLMWrapper(_default_llm())
+        judge_embeddings = LangchainEmbeddingsWrapper(HuggingFaceEmbeddings(model_name=EVAL_EMBEDDING_MODEL))
+        return judge_llm, judge_embeddings
+    except Exception as exc:
+        logger.warning("local ragas judge/embeddings unavailable (%s); using ragas defaults", exc)
+        return None, None
+
+
+def _ensure_ragas_importable() -> None:
+    """Working around a real (as of ragas 0.4.3 + langchain-community
+    0.4.x) upstream break: ragas.llms.base unconditionally imports
+    `langchain_community.chat_models.vertexai.ChatVertexAI`, which
+    langchain-community dropped in its 0.4 line (VertexAI moved to the
+    standalone `langchain-google-vertexai` package). We never use
+    VertexAI, so a stub class satisfies the import -- the isinstance
+    checks ragas does against it simply never match, which is exactly
+    what we want.
 
     Pinning langchain-community down to a version that still has that
     module isn't a safe fix here: it drags langchain-core back to the
     0.3.x line, which the installed langchain-anthropic (1.x, requires
     modern langchain-core) doesn't support -- that would break the RAG/
     SQL/doc agents themselves, not just eval.
+
+    Every function in this module that touches `ragas.*` calls this
+    first (not just `_import_ragas`) -- any of them can be the first
+    `ragas` import in a given process, and the shim must be in place
+    before *any* of them, not just whichever happens to run first.
     """
 
     if "langchain_community.chat_models.vertexai" not in sys.modules:
@@ -73,6 +129,10 @@ def _import_ragas():
             sys.modules["langchain_community.chat_models.vertexai"] = shim
             logger.debug("shimmed langchain_community.chat_models.vertexai for ragas import")
 
+
+def _import_ragas():
+    _ensure_ragas_importable()
+
     from ragas import evaluate
     from ragas.metrics import answer_relevancy, context_precision, context_recall, faithfulness
 
@@ -80,13 +140,28 @@ def _import_ragas():
 
 
 def _build_rag_agent():
+    """The RAGAgent under evaluation must be wired to the project's
+    configured backend the same way main.py/mcp_server.py wire it --
+    without `llm_backend`, `RAGAgent.__init__` leaves `self.llm = None`
+    and every answer is the raw-context stub template, not a genuine
+    generation, which would make any RAGAS score meaningless (it'd be
+    scoring the stub, not the RAG pipeline).
+    """
+
     from src.agents.rag_agent import RAGAgent
+    from src.config import load_config
     from src.hybrid_retrieval import HybridRetriever
     from src.vectorstore import VectorStore
 
+    config = load_config()
     vector_store = VectorStore()
     retriever = HybridRetriever(vector_store)
-    return RAGAgent(retriever=retriever)
+    return RAGAgent(
+        retriever=retriever,
+        llm_backend=config.agents.llm_backend,
+        ollama_model=config.agents.ollama_model,
+        ollama_base_url=config.agents.ollama_base_url,
+    )
 
 
 async def _answer_all(rag_agent, testset: list[dict]) -> list:
@@ -127,8 +202,31 @@ def run_rag_eval(testset_path: str, output_path: str | None = None, rag_agent=No
         }
     )
 
-    result = evaluate(dataset, metrics=metrics)
-    scores = {k: float(v) for k, v in result.items()}
+    judge_llm, judge_embeddings = _ragas_judge_llm_and_embeddings()
+    # A local Ollama server generally serializes concurrent requests
+    # rather than truly parallelizing them, so ragas's default
+    # max_workers=16 queues most jobs behind each other -- combined with
+    # the default 180s timeout, that queuing alone was enough to time
+    # out roughly half the jobs in practice against a small local model.
+    # A low worker count keeps each job's actual wait time close to its
+    # real generation time; the longer timeout covers what's left.
+    from ragas.run_config import RunConfig
+
+    run_config = RunConfig(timeout=600, max_workers=2)
+    result = evaluate(
+        dataset, metrics=metrics, llm=judge_llm, embeddings=judge_embeddings, run_config=run_config
+    )
+    # ragas 0.4.x's EvaluationResult has no dict-like `.items()` (that was
+    # an older ragas version's interface) -- `to_pandas()` is the stable
+    # public API, and its per-metric column mean (pandas skips NaN by
+    # default) is the same aggregate `evaluate()` computes internally,
+    # but survives individual rows that timed out instead of raising.
+    scores_df = result.to_pandas()
+    scores = {
+        metric.name: float(scores_df[metric.name].mean())
+        for metric in metrics
+        if metric.name in scores_df.columns
+    }
 
     if output_path:
         Path(output_path).write_text(json.dumps(scores, indent=2), encoding="utf-8")
@@ -374,4 +472,16 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Running this file directly (`python eval/run_ragas_eval.py`, the
+    # exact invocation this project's README and CI workflow document)
+    # puts this file's own directory -- not the project root -- at
+    # sys.path[0]. run_retrieval_eval/run_sql_guardrail_eval below do
+    # `from eval.metrics import ...`, which needs the project root (the
+    # parent of this eval/ directory) importable as a package root;
+    # without it those two sections crash with `ModuleNotFoundError: No
+    # module named 'eval'` after rag/sql/doc eval have already run.
+    # `python -m eval.run_ragas_eval` and importing this module normally
+    # (main.py's CLI, pytest) are unaffected -- the project root is
+    # already on sys.path in both cases.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     main()
