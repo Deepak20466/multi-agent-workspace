@@ -16,8 +16,8 @@ agents:
   rag_model: claude-3-5-sonnet-20240620
   max_iterations: 5
   memory: redis
-  llm_backend: anthropic          # anthropic | ollama
-  ollama_model: llama3
+  llm_backend: ollama          # anthropic | ollama
+  ollama_model: qwen2.5:0.5b
   ollama_base_url: http://localhost:11434
 
 resilience:

@@ -1,0 +1,11 @@
+Quarterly Sales Summary
+
+Q1 2026: Total revenue was $1.24M across 3,150 orders, an increase of 8% over Q4 2025. The North America region led with $620K in revenue, followed by Europe at $410K and Asia-Pacific at $210K. The best-selling product category was Electronics, accounting for 42% of total revenue.
+
+Q2 2026: Total revenue grew to $1.38M across 3,410 orders, an 11% increase quarter-over-quarter. North America remained the top region at $690K, Europe grew to $460K, and Asia-Pacific reached $230K. Electronics again led product categories at 39% of revenue, with Home Goods rising to 25%.
+
+Q3 2026: Total revenue reached $1.51M across 3,720 orders, a 9.4% increase over Q2. North America contributed $740K, Europe $505K, and Asia-Pacific $265K. Home Goods overtook Electronics as the top category at 33% of revenue, with Electronics close behind at 31%.
+
+Q4 2026 (forecast): Revenue is projected to reach $1.65M based on current order trends and seasonal demand, driven primarily by continued growth in the Home Goods and Electronics categories across all regions.
+
+Year-to-date (Q1-Q3 2026) totals: $4.13M in revenue across 10,280 orders, with an average order value of approximately $402.
