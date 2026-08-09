@@ -17,6 +17,16 @@ from src.utils.retry_handler import async_api_rate_limit_retry
 DEFAULT_N_ALTERNATIVES = 3
 
 
+def _extract_text(response: object) -> str:
+    """Agent-level `llm` objects in this codebase are expected to return
+    a plain string from `.ainvoke`, but a raw langchain ChatModel returns
+    a message object instead — accept either.
+    """
+
+    content = getattr(response, "content", None)
+    return str(content) if content is not None else str(response)
+
+
 class QueryExpander:
     """Generates paraphrased variants of a query via an LLM."""
 
@@ -40,7 +50,7 @@ class QueryExpander:
             f"Query: {query}"
         )
         raw = await self.llm.ainvoke(prompt)
-        alternatives = [line.strip() for line in str(raw).splitlines() if line.strip()][:n]
+        alternatives = [line.strip() for line in _extract_text(raw).splitlines() if line.strip()][:n]
 
         logger.info("expanded query '{}' into {} alternative(s)", query, len(alternatives))
         return [query, *alternatives]
@@ -68,7 +78,7 @@ class QueryExpander:
             f"Question: {query}"
         )
         raw = await self.llm.ainvoke(prompt)
-        passage = str(raw).strip()
+        passage = _extract_text(raw).strip()
 
         logger.info("generated HyDE passage for query '{}'", query)
         return passage or query

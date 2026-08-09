@@ -416,3 +416,125 @@ def test_ragas_judge_llm_and_embeddings_degrades_to_none_on_failure(monkeypatch)
 
     assert judge_llm is None
     assert judge_embeddings is None
+
+
+# ---------------------------------------------------------------------------
+# Graceful skip when the configured LLM backend is unreachable (e.g. no local
+# Ollama server in CI) -- must be a clean, honest "skipped", never fabricated
+# scores and never silently confused with a genuine application failure.
+# ---------------------------------------------------------------------------
+
+
+def test_run_rag_eval_skips_when_llm_backend_unreachable(tmp_path, monkeypatch):
+    import eval.run_ragas_eval as run_ragas_eval_module
+
+    monkeypatch.setattr(
+        run_ragas_eval_module, "_llm_backend_skip_reason", lambda: "Ollama backend configured but unreachable"
+    )
+    build_agent_spy = MagicMock(side_effect=AssertionError("should not build an agent when skipping"))
+    monkeypatch.setattr(run_ragas_eval_module, "_build_rag_agent", build_agent_spy)
+
+    testset_path = tmp_path / "testset.json"
+    testset_path.write_text(
+        json.dumps([{"question": "q", "contexts": ["c"], "ground_truth": "gt"}]), encoding="utf-8"
+    )
+
+    result = run_ragas_eval_module.run_rag_eval(str(testset_path))
+
+    assert result["status"].startswith("skipped:")
+    assert "unreachable" in result["status"]
+    build_agent_spy.assert_not_called()
+
+
+def test_run_rag_eval_does_not_swallow_genuine_answer_failures(tmp_path):
+    """A real application error (not a reachability problem) must
+    propagate, not be silently reported as "skipped" -- CI needs to be
+    able to tell "no local LLM available" apart from "the RAG pipeline
+    is actually broken". Passing `rag_agent` explicitly bypasses the
+    backend pre-flight check entirely (same as any other test-injected
+    agent), so this exercises the real, unmocked exception path.
+    """
+
+    import eval.run_ragas_eval as run_ragas_eval_module
+
+    failing_agent = MagicMock()
+    failing_agent.answer = AsyncMock(side_effect=RuntimeError("unexpected application bug"))
+
+    testset_path = tmp_path / "testset.json"
+    testset_path.write_text(
+        json.dumps([{"question": "q", "contexts": ["c"], "ground_truth": "gt"}]), encoding="utf-8"
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected application bug"):
+        run_ragas_eval_module.run_rag_eval(str(testset_path), rag_agent=failing_agent)
+
+
+async def test_run_sql_eval_skips_when_llm_backend_unreachable(tmp_path, monkeypatch):
+    import eval.run_ragas_eval as run_ragas_eval_module
+
+    monkeypatch.setattr(
+        run_ragas_eval_module, "_llm_backend_skip_reason", lambda: "Ollama backend configured but unreachable"
+    )
+    build_agent_spy = MagicMock(side_effect=AssertionError("should not build an agent when skipping"))
+    monkeypatch.setattr(run_ragas_eval_module, "_build_sql_agent", build_agent_spy)
+
+    testset_path = tmp_path / "sql_testset.json"
+    testset_path.write_text(
+        json.dumps([{"question": "how many?", "ground_truth_sql": "SELECT 1"}]), encoding="utf-8"
+    )
+
+    result = await run_ragas_eval_module.run_sql_eval(str(testset_path), database_url="sqlite:///:memory:")
+
+    assert result["status"].startswith("skipped:")
+    build_agent_spy.assert_not_called()
+
+
+async def test_run_doc_eval_skips_when_llm_backend_unreachable(tmp_path, monkeypatch):
+    import eval.run_ragas_eval as run_ragas_eval_module
+
+    monkeypatch.setattr(
+        run_ragas_eval_module, "_llm_backend_skip_reason", lambda: "Ollama backend configured but unreachable"
+    )
+    build_agent_spy = MagicMock(side_effect=AssertionError("should not build an agent when skipping"))
+    monkeypatch.setattr(run_ragas_eval_module, "_build_doc_agent", build_agent_spy)
+
+    testset_path = tmp_path / "doc_testset.json"
+    testset_path.write_text(
+        json.dumps([{"question": "what does it say?", "file_path": "irrelevant.txt", "expected_contains": ["x"]}]),
+        encoding="utf-8",
+    )
+
+    result = await run_ragas_eval_module.run_doc_eval(str(testset_path))
+
+    assert result["status"].startswith("skipped:")
+    build_agent_spy.assert_not_called()
+
+
+def test_build_sql_agent_wires_configured_backend(tmp_path):
+    from eval.run_ragas_eval import _build_sql_agent
+
+    db_path = tmp_path / "seed.db"
+    db_url = f"sqlite:///{db_path}"
+    seed(db_url)
+
+    from src.config import load_config
+
+    config = load_config()
+    agent = _build_sql_agent(db_url)
+
+    assert agent.llm_backend == config.agents.llm_backend
+    assert agent.ollama_model == config.agents.ollama_model
+
+
+def test_build_doc_agent_wires_configured_backend():
+    from eval.run_ragas_eval import _build_doc_agent
+    from src.config import load_config
+
+    config = load_config()
+    agent = _build_doc_agent()
+
+    if config.agents.llm_backend == "ollama":
+        assert agent.llm is not None
+        assert agent.llm.model == config.agents.ollama_model
+    else:
+        assert agent.llm is not None

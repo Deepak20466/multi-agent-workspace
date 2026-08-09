@@ -9,10 +9,26 @@ check_gates.py to consume in CI:
 - Doc: LLM-judge accuracy over eval/doc_testset.json.
 
 Each section degrades to `{"status": "skipped: <reason>"}` instead of
-raising when its prerequisites aren't met (no DATABASE_URL, no testset,
-ragas itself failing to import) -- see `_import_ragas` below -- so a
-partial CI environment still produces a usable results file rather than
-crashing the whole run.
+raising when its prerequisites aren't met -- no DATABASE_URL, no
+testset, ragas itself failing to import (see `_import_ragas` below), or
+the configured chat backend not actually being reachable (e.g.
+`agents.llm_backend: ollama` in config.yaml but no Ollama server running,
+the case on a plain GitHub-hosted CI runner) -- so a partial environment
+still produces a usable results file rather than crashing the whole run.
+
+That last case is deliberately a *pre-flight* check (`src.llm_factory.
+backend_reachable`, checked before any real work starts), not a broad
+try/except around the actual eval work: if the backend is reported
+reachable but a real run still fails, that's let through as a genuine,
+loud application error (non-zero exit) rather than being swallowed as
+"skipped" -- an eval script should never quietly mask a real bug as an
+environment gap. Every default-agent-construction call site below
+threads config.agents.llm_backend/ollama_model/ollama_base_url through
+explicitly (mirroring main.py/mcp_server.py) so the agent under
+evaluation is always genuinely wired to the same backend this module
+checks reachability for, rather than silently falling back to a
+different backend (e.g. via an ambient LLM_BACKEND env var) than what
+was actually probed.
 """
 
 from __future__ import annotations
@@ -139,6 +155,24 @@ def _import_ragas():
     return evaluate, [faithfulness, answer_relevancy, context_precision, context_recall]
 
 
+def _llm_backend_skip_reason() -> str | None:
+    """`None` if the project's configured chat backend (config.yaml's
+    `agents.llm_backend`) is reachable; otherwise a human-readable reason
+    to skip. Callers use this as a pre-flight check before building a
+    default agent, so "no local Ollama in this environment" comes back
+    as a clear, honest `{"status": "skipped: ..."}` instead of either a
+    confusing low-level connection traceback or -- worse -- a misleading
+    0%-style "accuracy" score that looks like a real quality failure.
+    """
+
+    from src.config import load_config
+    from src.llm_factory import backend_reachable
+
+    config = load_config()
+    reachable, reason = backend_reachable(config.agents.llm_backend, config.agents.ollama_base_url)
+    return None if reachable else reason
+
+
 def _build_rag_agent():
     """The RAGAgent under evaluation must be wired to the project's
     configured backend the same way main.py/mcp_server.py wire it --
@@ -164,6 +198,39 @@ def _build_rag_agent():
     )
 
 
+def _build_sql_agent(database_url: str):
+    """Same backend-wiring gap as `_build_rag_agent` had: a bare
+    `SQLAgent(database_url)` never passes `llm_backend`, so it falls back
+    to `build_llm`'s own `LLM_BACKEND` env var / "anthropic" default
+    rather than the project's actually-configured backend.
+    """
+
+    from src.agents.sql_agent import SQLAgent
+    from src.config import load_config
+
+    config = load_config()
+    return SQLAgent(
+        database_url,
+        llm_backend=config.agents.llm_backend,
+        ollama_model=config.agents.ollama_model,
+        ollama_base_url=config.agents.ollama_base_url,
+    )
+
+
+def _build_doc_agent():
+    from src.agents.doc_agent import DocAgent
+    from src.config import load_config
+    from src.document_processing import DocumentProcessor
+
+    config = load_config()
+    return DocAgent(
+        document_processor=DocumentProcessor(),
+        llm_backend=config.agents.llm_backend,
+        ollama_model=config.agents.ollama_model,
+        ollama_base_url=config.agents.ollama_base_url,
+    )
+
+
 async def _answer_all(rag_agent, testset: list[dict]) -> list:
     return [await rag_agent.answer(row["question"]) for row in testset]
 
@@ -183,7 +250,13 @@ def run_rag_eval(testset_path: str, output_path: str | None = None, rag_agent=No
     if not testset:
         return {"status": f"skipped: testset at {testset_path} is empty"}
 
-    rag_agent = rag_agent or _build_rag_agent()
+    if rag_agent is None:
+        skip_reason = _llm_backend_skip_reason()
+        if skip_reason:
+            logger.warning("skipping RAG eval: %s", skip_reason)
+            return {"status": f"skipped: {skip_reason}"}
+        rag_agent = _build_rag_agent()
+
     responses = asyncio.run(_answer_all(rag_agent, testset))
 
     questions, answers, contexts, ground_truths = [], [], [], []
@@ -285,9 +358,12 @@ async def run_sql_eval(
     if not testset:
         return {"status": f"skipped: testset at {testset_path} is empty"}
 
-    from src.agents.sql_agent import SQLAgent
-
-    sql_agent = sql_agent or SQLAgent(database_url)
+    if sql_agent is None:
+        skip_reason = _llm_backend_skip_reason()
+        if skip_reason:
+            logger.warning("skipping SQL eval: %s", skip_reason)
+            return {"status": f"skipped: {skip_reason}"}
+        sql_agent = _build_sql_agent(database_url)
 
     correct = 0
     details = []
@@ -344,9 +420,19 @@ async def run_doc_eval(
     if not testset:
         return {"status": f"skipped: testset at {testset_path} is empty"}
 
-    from src.agents.doc_agent import DocAgent
-
-    doc_agent = doc_agent or DocAgent()
+    if doc_agent is None:
+        # Unlike run_rag_eval/run_sql_eval, DocAgent has a genuinely safe
+        # fallback (its raw-context stub) when no llm_backend is wired,
+        # so a missing backend alone wouldn't crash this section -- but
+        # it *would* silently score the stub instead of a real answer,
+        # and (now that _build_doc_agent wires a real backend) an
+        # unreachable one would otherwise surface as a wall of confusing
+        # per-question connection errors rather than one clear skip.
+        skip_reason = _llm_backend_skip_reason()
+        if skip_reason:
+            logger.warning("skipping doc eval: %s", skip_reason)
+            return {"status": f"skipped: {skip_reason}"}
+        doc_agent = _build_doc_agent()
 
     if judge_llm is None:
         try:

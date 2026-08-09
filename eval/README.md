@@ -58,6 +58,45 @@ python eval/check_gates.py --results eval/results_v3.json             # optional
 prerequisites aren't met, so a partial local setup still produces a
 usable results file.
 
+## Local real evaluation vs. CI's skipped evaluation
+
+`config.yaml` ships with `agents.llm_backend: ollama`, so `rag`/`sql`/`doc`
+eval always *attempt* a real Ollama-backed run wherever this pipeline
+runs -- including in CI. The distinction is what happens next, and
+`results_v3.json`'s per-section shape tells you which one occurred:
+
+1. **Genuinely executed** -- the section is a dict of real numbers (e.g.
+   `{"faithfulness": 0.75, ...}` or `{"accuracy": 0.43, "n": 7, ...}`).
+   This is what happens on a machine (a laptop, a self-hosted runner)
+   that actually has Ollama running with the configured model pulled --
+   see the real, unmocked baseline below, run locally against
+   `qwen2.5:0.5b`.
+2. **Skipped** -- the section is `{"status": "skipped: Ollama backend
+   configured but unreachable at http://localhost:11434 (...)"}`. This
+   is what happens on a plain GitHub-hosted CI runner: there's no Ollama
+   server there at all. `run_rag_eval`/`run_sql_eval`/`run_doc_eval`
+   each check `src.llm_factory.backend_reachable` *before* doing any
+   real work and return this immediately -- not a fabricated score, not
+   a crash, just an honest "couldn't run this." `check_gates.py` reports
+   `SKIP` (not `FAIL`) for a skipped section's gates, so CI stays green
+   on an environment gap it can't control, while `eval/results_v3.json`
+   still records exactly why nothing ran.
+3. **Failed** -- an uncaught exception, non-zero exit code, and CI goes
+   red. This is deliberately *not* caught and downgraded to a skip:
+   if the backend is reachable but the pipeline still errors (a real
+   code bug, a malformed prompt, etc.), that must surface loudly, not
+   get silently absorbed into "environment gap."
+
+CI does not run a local Ollama server and has no `ANTHROPIC_API_KEY`/
+`OPENAI_API_KEY` configured, so today it always lands in case 2 for
+`rag`/`sql`/`doc` -- `sql_guardrail` (pure AST validation, no LLM) and
+`retrieval` (skips for its own, unrelated reason -- see below) still run
+for real either way. This is intentional: per project policy, CI does
+not require cloud API keys or a bundled local model just to turn green.
+Case 1 -- the real thing -- is what running this pipeline locally, on a
+machine with `ollama serve` and the configured model actually pulled,
+gives you; see the baseline below.
+
 ## Baseline (2026-08-09, `qwen2.5:0.5b`)
 
 ```

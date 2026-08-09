@@ -19,6 +19,7 @@ from src.cache import ResponseCache
 from src.citation import (
     build_citations,
     format_answer_with_citations,
+    invalid_citation_markers,
     strip_invalid_citation_markers,
     verify_citation_markers,
 )
@@ -187,9 +188,14 @@ class RAGAgent:
                     # were retrieved). Strip it rather than let it render
                     # as if it pointed to a real source: the citation IDs/
                     # metadata built above are untouched, only the
-                    # answer's own inline markers are sanitized.
-                    log_event("rag_invalid_citation_marker", query=safe_query, answer=raw_answer)
-                    logger.warning("dropping hallucinated citation marker(s) from answer to {!r}", safe_query)
+                    # answer's own inline markers are sanitized. Logged
+                    # marker numbers, not the answer/query text itself --
+                    # the generated answer can echo content straight from
+                    # source documents, which don't belong verbatim in
+                    # application logs.
+                    invalid_markers = invalid_citation_markers(raw_answer, len(citations))
+                    log_event("rag_invalid_citation_marker", invalid_markers=invalid_markers, n_citations=len(citations))
+                    logger.warning("dropping hallucinated citation marker(s) {}", invalid_markers)
                     raw_answer = strip_invalid_citation_markers(raw_answer, len(citations))
                 answer_text = format_answer_with_citations(raw_answer, citations)
 

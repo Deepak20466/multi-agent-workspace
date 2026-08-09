@@ -200,3 +200,48 @@ def test_ingest_endpoint_returns_clear_error_when_ocr_unavailable(app_module, sa
 
     assert response.status_code == 422
     assert "OCR" in response.json()["detail"]
+
+
+def test_ingest_endpoint_rejects_oversized_upload(app_module, sandboxed_upload_root, monkeypatch):
+    """An unbounded `file.file.read()` on a public upload endpoint is a
+    straightforward memory/disk exhaustion vector -- uploads over the
+    configured cap must be rejected (413) before being written to disk,
+    not silently buffered in full first.
+    """
+
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 10)
+
+    client = TestClient(app_module.app)
+    response = client.post(
+        "/ingest",
+        files={"file": ("big.txt", b"x" * 1000, "text/plain")},
+    )
+
+    assert response.status_code == 413
+    assert not (sandboxed_upload_root / "big.txt").exists()
+
+
+def test_read_upload_within_limit_accepts_content_under_the_cap(app_module):
+    from io import BytesIO
+
+    from fastapi import UploadFile
+
+    upload = UploadFile(filename="small.txt", file=BytesIO(b"hello world"))
+    content = app_module._read_upload_within_limit(upload, max_bytes=1024)
+
+    assert content == b"hello world"
+
+
+def test_read_upload_within_limit_rejects_content_over_the_cap():
+    from io import BytesIO
+
+    from fastapi import HTTPException, UploadFile
+
+    import main as app_module
+
+    upload = UploadFile(filename="big.txt", file=BytesIO(b"x" * 1000))
+
+    with pytest.raises(HTTPException) as exc_info:
+        app_module._read_upload_within_limit(upload, max_bytes=10)
+
+    assert exc_info.value.status_code == 413

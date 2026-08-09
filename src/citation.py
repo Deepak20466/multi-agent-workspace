@@ -64,13 +64,22 @@ def format_answer_with_citations(answer: str, citations: list[Citation]) -> str:
     return "\n".join(lines)
 
 
+def invalid_citation_markers(answer: str, n_citations: int) -> list[int]:
+    """The distinct `[n]` marker numbers in `answer` that don't correspond
+    to a real citation (n outside `1..n_citations`), sorted ascending.
+    Empty when every marker is valid.
+    """
+
+    markers = {int(m) for m in re.findall(r"\[(\d+)\]", answer)}
+    return sorted(m for m in markers if not (1 <= m <= n_citations))
+
+
 def verify_citation_markers(answer: str, n_citations: int) -> bool:
     """Sanity check that every [n] marker used in the answer text refers to
     an actual citation index, catching hallucinated citation numbers.
     """
 
-    markers = {int(m) for m in re.findall(r"\[(\d+)\]", answer)}
-    return all(1 <= m <= n_citations for m in markers)
+    return not invalid_citation_markers(answer, n_citations)
 
 
 def strip_invalid_citation_markers(answer: str, n_citations: int) -> str:

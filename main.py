@@ -338,6 +338,32 @@ _RESERVED_WINDOWS_NAMES = {
 }
 
 
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))  # 50 MB
+
+
+def _read_upload_within_limit(upload: UploadFile, max_bytes: int) -> bytes:
+    """Reads `upload` in bounded chunks, rejecting anything over
+    `max_bytes` instead of buffering an arbitrarily large upload into
+    memory unconditionally -- an uncapped `file.file.read()` on a public
+    upload endpoint is a straightforward memory/disk exhaustion vector.
+    """
+
+    chunks: list[bytes] = []
+    total = 0
+    chunk_size = 1024 * 1024
+    while True:
+        chunk = upload.file.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=413, detail=f"file exceeds maximum upload size of {max_bytes} bytes"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _resolve_safe_upload_path(filename: Optional[str]) -> Path:
     """Resolve a client-supplied upload filename to a path guaranteed to
     live inside `_UPLOAD_ROOT`.
@@ -379,7 +405,7 @@ def _resolve_safe_upload_path(filename: Optional[str]) -> Path:
 @app.post("/ingest")
 def ingest(file: UploadFile) -> dict:
     dest = _resolve_safe_upload_path(file.filename)
-    dest.write_bytes(file.file.read())
+    dest.write_bytes(_read_upload_within_limit(file, MAX_UPLOAD_BYTES))
 
     try:
         _, chunks = _document_processor.process(dest)

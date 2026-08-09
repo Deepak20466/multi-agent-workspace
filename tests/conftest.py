@@ -1,30 +1,26 @@
-import urllib.request
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.document_processing import DocumentProcessor
+from src.llm_factory import backend_reachable
 
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL = "qwen2.5:0.5b"
 
 
-def _ollama_reachable(base_url: str = OLLAMA_BASE_URL, timeout: float = 1.0) -> bool:
-    """Probe a local Ollama server without pulling in a dependency just
-    for the check -- used to skip (not fail) the real-generation
-    integration tests on machines/CI without Ollama running.
-    """
-
-    try:
-        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
 @pytest.fixture(scope="session")
 def ollama_available() -> bool:
-    return _ollama_reachable()
+    """Session-scoped so the probe (a real network call, even if a fast
+    local one) only happens once per test run, not once per test.
+    Delegates to the same `backend_reachable` used by
+    eval/run_ragas_eval.py, so "is Ollama up" is answered identically
+    everywhere it matters instead of via a second, drifting copy of the
+    same check.
+    """
+
+    reachable, _ = backend_reachable("ollama", OLLAMA_BASE_URL)
+    return reachable
 
 
 @pytest.fixture

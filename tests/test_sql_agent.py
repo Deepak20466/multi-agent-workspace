@@ -101,7 +101,12 @@ def test_sql_ast_guardrail_blocks_delete_and_cte_writes():
         validate_sql("WITH deleted AS (DELETE FROM sales RETURNING *) SELECT * FROM deleted")
 
 
-def test_default_llm_uses_configured_model_without_real_anthropic_client(mock_anthropic, tmp_path):
+def test_default_llm_uses_configured_model_without_real_anthropic_client(mock_anthropic, tmp_path, monkeypatch):
+    # Isolate from whatever LLM_BACKEND a developer's local .env or shell
+    # happens to have set -- agent.llm_backend is None (not requested
+    # here), so this test asserts build_llm()'s "anthropic" default,
+    # which only holds if no ambient LLM_BACKEND override is in play.
+    monkeypatch.delenv("LLM_BACKEND", raising=False)
     agent = _make_agent(tmp_path)
 
     llm = agent._default_llm()

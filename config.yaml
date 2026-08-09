@@ -35,7 +35,21 @@ retrieval:
   use_rerank: true
   rerank_model: rerank-english-v3.0
   rerank_top_k: 5
-  use_flashrank: true
+  # Minimum rerank_score a candidate must clear to reach the LLM/citations,
+  # applied after reranking (not before -- RRF's fused rank score doesn't
+  # reflect direct query-document relevance the way the reranker's score
+  # does). 0.0 matches the local ms-marco cross-encoder's natural
+  # relevant/irrelevant decision boundary; retune if running the
+  # Cohere/flashrank tiers, whose relevance scores use a different scale.
+  rerank_score_threshold: 0.0
+  # flashrank is installed and functional, but its relevance score is
+  # normalized to ~0-1 (not the cross-encoder's raw logit scale) --
+  # rerank_score_threshold above is calibrated against the cross-encoder
+  # tier only. Flip this once the threshold has been recalibrated and
+  # retested against flashrank's scale, or filtering will silently stop
+  # working (an irrelevant flashrank score of ~0.00001 still clears a
+  # >= 0.0 threshold).
+  use_flashrank: false
   flashrank_model: ms-marco-MiniLM-L-12-v2
 
 sql:
