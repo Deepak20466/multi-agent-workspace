@@ -78,3 +78,111 @@ async def test_hybrid_retriever_alpha_zero_ignores_vector_only_results():
 
     ids = {r.chunk.chunk_id for r in results}
     assert ids == {"b"}
+
+
+# ---------------------------------------------------------------------------
+# BM25Index.build() -- accumulate-across-calls regression tests.
+#
+# main.py's /ingest endpoint and `ingest` CLI command both call
+# index_corpus(chunks) (-> BM25Index.build(chunks)) once per newly
+# processed file, passing only that file's chunks each time -- never the
+# full corpus. build() must merge into whatever's already indexed rather
+# than replacing it, or every ingest after the first silently makes BM25
+# blind to every previously ingested document (while dense/Chroma search,
+# an upsert, keeps accumulating normally -- see VectorStore.add_chunks).
+# ---------------------------------------------------------------------------
+
+
+def test_bm25_index_build_accumulates_across_multiple_calls():
+    # >=3 docs -- with exactly 2, BM25's IDF for a term in half the
+    # corpus is 0 (see the alpha=0.0 test above), which would zero out
+    # "alpha"'s own score too.
+    index = BM25Index()
+    index.build([_chunk("a", "alpha content")])
+    index.build([_chunk("b", "beta content")])
+    index.build([_chunk("c", "unrelated filler content")])
+
+    assert {c.chunk_id for c in index.chunks} == {"a", "b", "c"}
+    assert [r.chunk.chunk_id for r in index.search("alpha")] == ["a"]
+
+
+def test_bm25_index_build_sequential_documents_all_remain_searchable():
+    # >=3 docs, one distinguishing term each, no shared IDF-zeroing terms
+    # -- see the alpha=0.0 test above for why.
+    index = BM25Index()
+    index.build([_chunk("a", "alpha astronomy content topic")])
+    index.build([_chunk("b", "beta accounting content topic")])
+    index.build([_chunk("c", "gamma gardening content topic")])
+
+    assert {c.chunk_id for c in index.chunks} == {"a", "b", "c"}
+    assert [r.chunk.chunk_id for r in index.search("astronomy")] == ["a"]
+    assert [r.chunk.chunk_id for r in index.search("accounting")] == ["b"]
+    assert [r.chunk.chunk_id for r in index.search("gardening")] == ["c"]
+
+
+def test_bm25_index_build_reindexing_same_chunk_id_upserts_not_duplicates():
+    index = BM25Index()
+    index.build([_chunk("a", "original alpha content")])
+    index.build([_chunk("b", "beta content")])
+
+    # Re-indexing "a" (e.g. re-ingesting an edited file -- chunk_id is
+    # stable per (source_path, chunk_index), see
+    # document_processing._stable_chunk_id) must replace the existing
+    # entry, not add a duplicate.
+    index.build([_chunk("a", "updated alpha content")])
+
+    assert len(index.chunks) == 2
+    ids = [c.chunk_id for c in index.chunks]
+    assert ids.count("a") == 1
+    updated = next(c for c in index.chunks if c.chunk_id == "a")
+    assert updated.text == "updated alpha content"
+
+
+def test_bm25_index_build_single_call_behavior_unchanged():
+    # One build() call on a fresh index -- the existing single-document
+    # indexing path -- behaves exactly as before this fix.
+    index = BM25Index()
+    index.build([_chunk("a", "alpha content"), _chunk("b", "beta content")])
+
+    assert {c.chunk_id for c in index.chunks} == {"a", "b"}
+
+
+def test_bm25_index_build_empty_chunks_on_fresh_index_stays_unbuilt():
+    index = BM25Index()
+    index.build([])
+
+    assert index.chunks == []
+    assert index.is_built is False
+    assert index.search("anything") == []
+
+
+def test_bm25_index_build_empty_chunks_after_existing_index_is_a_no_op():
+    # index_corpus([]) (e.g. a file that produced zero chunks) must not
+    # wipe out chunks from documents already indexed.
+    index = BM25Index()
+    index.build([_chunk("a", "alpha content")])
+    index.build([])
+
+    assert {c.chunk_id for c in index.chunks} == {"a"}
+    assert index.is_built is True
+
+
+async def test_hybrid_retriever_index_corpus_accumulates_across_ingests_like_production():
+    """End-to-end at the HybridRetriever/index_corpus level, mirroring
+    main.py's actual /ingest and `ingest` CLI call pattern: one
+    index_corpus(chunks) call per file, sequentially, on the same
+    retriever instance."""
+
+    mock_store = MagicMock()
+    mock_store.similarity_search.return_value = []  # isolate the BM25 signal
+
+    retriever = HybridRetriever(mock_store)
+    retriever.index_corpus([_chunk("a", "alpha astronomy content topic")])
+    retriever.index_corpus([_chunk("b", "beta accounting content topic")])
+    retriever.index_corpus([_chunk("c", "gamma gardening content topic")])
+
+    results_a = await retriever.retrieve(["astronomy"], top_k=5)
+    results_b = await retriever.retrieve(["accounting"], top_k=5)
+
+    assert [r.chunk.chunk_id for r in results_a] == ["a"]
+    assert [r.chunk.chunk_id for r in results_b] == ["b"]

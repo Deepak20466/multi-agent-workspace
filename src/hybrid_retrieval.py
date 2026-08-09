@@ -44,8 +44,28 @@ class BM25Index:
         return self._bm25 is not None
 
     def build(self, chunks: list[Chunk]) -> None:
-        self.chunks = chunks
-        corpus = [_tokenize(c.text) for c in chunks]
+        """(Re)build the sparse index over `chunks`, merged into whatever
+        is already indexed -- keyed by chunk_id, upsert semantics matching
+        `VectorStore.add_chunks`'s Chroma upsert (a chunk with an id
+        already present is replaced in place; every other previously
+        indexed chunk is kept). `index_corpus` is called once per
+        newly-processed file (see main.py's `/ingest` endpoint and
+        `ingest` CLI command), each time with only that file's chunks --
+        a plain `self.chunks = chunks` assignment here would silently
+        discard every previously indexed file's chunks on the next
+        ingest, leaving BM25 search blind to everything except the most
+        recently ingested document while dense/Chroma search (upsert,
+        never a wholesale replace) kept accumulating normally.
+
+        `BM25Okapi` has no incremental-update API of its own, so it's
+        still rebuilt from scratch here on every call -- just from the
+        full merged corpus instead of only this call's `chunks`.
+        """
+
+        merged = {c.chunk_id: c for c in self.chunks}
+        merged.update((c.chunk_id, c) for c in chunks)
+        self.chunks = list(merged.values())
+        corpus = [_tokenize(c.text) for c in self.chunks]
         self._bm25 = BM25Okapi(corpus) if corpus else None
 
     def search(self, query: str, k: int = 10) -> list[RetrievedChunk]:
