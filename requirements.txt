@@ -59,3 +59,11 @@ ruff>=0.1.11
 click>=8.1.7
 rich>=13.7.0
 PyYAML>=6.0
+
+# Floor pin, not a direct dependency: cryptography is pulled in transitively
+# (boto3/presidio/etc.) and versions <49.0.0 have a real X.509 name-constraint
+# bypass (CVE-2026-69248 / GHSA-m2h6-j472-rp4c / PYSEC-2026-3554) plus two
+# related pkcs7/cert-chain advisories fixed in the same release. 49.0.0 is a
+# drop-in upgrade for this project's usage (no API this codebase calls
+# changed between these versions).
+cryptography>=49.0.0
